@@ -44,7 +44,9 @@ Binaries: `target/release/traur` (CLI) and `target/release/traur-hook` (ALPM hoo
 ```bash
 sudo install -Dm755 target/release/traur /usr/bin/traur
 sudo install -Dm755 target/release/traur-hook /usr/bin/traur-hook
-sudo install -Dm644 hook/traur.hook /usr/share/libalpm/hooks/traur.hook
+hook_file=hook/traur.hook
+pacman --disable-sandbox-network --version >/dev/null 2>&1 && hook_file=hook/traur-network.hook
+sudo install -Dm644 "$hook_file" /usr/share/libalpm/hooks/traur.hook
 ```
 
 ## Adding a new feature
@@ -86,4 +88,5 @@ Use `/release <version>` in Claude Code to run the full release workflow (bump v
 | `data/patterns.toml` | Regex pattern database (239 patterns). Total signals: 279 (pattern + hardcoded) |
 | `src/bench.rs` | Batch benchmark (parallel scan, retry, stats) |
 | `hook/traur.hook` | ALPM hook definition |
+| `hook/traur-network.hook` | Network opt-in hook for pacman builds that isolate hooks |
 | `hook/traur-hook.rs` | Hook binary (filters AUR pkgs, runs scans) |

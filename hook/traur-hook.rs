@@ -86,7 +86,20 @@ fn main() {
         .collect();
 
     // Batch-fetch AUR metadata to separate real AUR packages from local-only ones
-    let metadata = bulk::batch_fetch_metadata(&to_scan);
+    let metadata = match bulk::batch_fetch_metadata(&to_scan) {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            let _ = writeln!(tty, "{}", format!("  error: {e}").red());
+            let _ = writeln!(
+                tty,
+                "{}",
+                "traur: AUR metadata could not be fetched — blocking transaction"
+                    .red()
+                    .bold()
+            );
+            std::process::exit(1);
+        }
+    };
     let not_found: Vec<&str> = to_scan
         .iter()
         .filter(|n| !metadata.contains_key(n.as_str()))

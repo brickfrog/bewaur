@@ -184,7 +184,13 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
     };
 
     eprintln!("  Fetching package metadata for {} installed packages...", names.len());
-    let metadata = batch_fetch_metadata(&names);
+    let metadata = match batch_fetch_metadata(&names) {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 1;
+        }
+    };
     let not_found: Vec<&str> = names
         .iter()
         .filter(|n| !metadata.contains_key(n.as_str()))

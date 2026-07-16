@@ -4,7 +4,9 @@ ALPM (pacman) hook integration for automatic pre-install scanning.
 
 ## Files
 
-- `traur.hook` — ALPM hook definition, installed to `/usr/share/libalpm/hooks/`
+- `traur.hook` — portable ALPM hook definition for standard pacman
+- `traur-network.hook` — variant for pacman builds that isolate hook networking;
+  opts in with `NetworkAccess = allowed`
 - `traur-hook.rs` — Hook binary entry point, compiled as a separate binary
 
 ## How it works
@@ -25,10 +27,17 @@ ALPM (pacman) hook integration for automatic pre-install scanning.
 ## Installation
 
 ```bash
-sudo install -Dm644 hook/traur.hook /usr/share/libalpm/hooks/traur.hook
+hook_file=hook/traur.hook
+pacman --disable-sandbox-network --version >/dev/null 2>&1 && hook_file=hook/traur-network.hook
+sudo install -Dm644 "$hook_file" /usr/share/libalpm/hooks/traur.hook
 ```
 
 The hook binary is installed as `/usr/bin/traur-hook` by the package.
+
+Both PKGBUILDs probe `pacman --disable-sandbox-network --version` and install
+`traur-network.hook` only when that extension is supported. Standard pacman
+rejects the extension's `NetworkAccess` key, so it must continue to receive
+`traur.hook`.
 
 ## Design decisions
 

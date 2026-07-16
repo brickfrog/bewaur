@@ -35,7 +35,12 @@ package() {
     cd "$pkgname-$pkgver"
     install -Dm0755 target/release/traur "$pkgdir/usr/bin/traur"
     install -Dm0755 target/release/traur-hook "$pkgdir/usr/bin/traur-hook"
-    install -Dm0644 hook/traur.hook "$pkgdir/usr/share/libalpm/hooks/traur.hook"
+    # CachyOS pacman isolates hooks; stock pacman rejects its NetworkAccess key.
+    local hook_file=hook/traur.hook
+    if pacman --disable-sandbox-network --version >/dev/null 2>&1; then
+        hook_file=hook/traur-network.hook
+    fi
+    install -Dm0644 "$hook_file" "$pkgdir/usr/share/libalpm/hooks/traur.hook"
     install -Dm0644 data/patterns.toml "$pkgdir/usr/share/traur/patterns.toml"
     install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

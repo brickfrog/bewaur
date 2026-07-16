@@ -4,6 +4,11 @@
 
 ### Fixed
 - **Hook fail-closed**: the ALPM hook now blocks the transaction when scans fail (git timeout, network error, etc.) instead of silently allowing unscanned packages through. Git clone/pull operations have a 30-second timeout to prevent indefinite hangs.
+- **CachyOS hook networking**: package builds now select a `NetworkAccess = allowed`
+  hook on pacman variants that isolate ALPM hooks from the network, while retaining
+  a separate portable hook for standard Arch pacman.
+- **Batch metadata errors**: AUR RPC transport and response failures are no longer
+  treated as packages missing from the AUR, which previously skipped trust scoring.
 
 ### Added
 - **`-bin` source verification** (`bin_source_verification`): cross-references a `-bin` package's declared upstream URL against its `source=()` download domains. Detects fork impersonation when a package claims one GitHub org as upstream but downloads binaries from a different org. Emits `B-BIN-GITHUB-ORG-MISMATCH` (+50) and `B-BIN-DOMAIN-MISMATCH` (+30) behavioral signals.

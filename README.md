@@ -13,6 +13,12 @@ Trust scoring for AUR packages, written in Rust. Analyzes PKGBUILDs, install scr
 paru -S traur
 ```
 
+The package installs the portable ALPM hook on standard Arch pacman. On pacman
+builds that isolate hooks from the network (currently CachyOS), it detects that
+capability at package-build time and installs the opt-in hook required by traur's
+AUR, git, and reputation checks. Both hook variants are kept in `hook/` so binary
+release packages can make the same selection without breaking standard pacman.
+
 ## Usage
 
 ```bash

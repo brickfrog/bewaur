@@ -4,6 +4,9 @@
 
 - **Unit tests** (`src/features/*/mod.rs`): Each feature has `#[cfg(test)] mod tests` that tests every signal it emits in isolation. Tests construct a `PackageContext` directly, call `feature.analyze()`, and assert on signal IDs.
 - **Integration tests** (`tests/feature_tests.rs`): Full-pipeline tests using `scan_pkgbuild()` that verify coordinator + scoring + tier assignment across multiple features.
+- **Hook packaging tests** (`tests/hook_tests.rs`): Verify that the standard ALPM
+  hook remains portable while the network-isolated pacman variant explicitly opts
+  in to networking.
 
 ## Fixtures
 
