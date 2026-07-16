@@ -13,14 +13,20 @@ impl Feature for InstallScriptAnalysis {
         };
 
         let compiled = patterns::compiled_patterns();
+        let executable_content = crate::shared::shell_syntax::strip_comments(content);
         let mut signals = Vec::new();
 
         for pat in compiled {
-            if pat.regex.is_match(content) {
-                let matched_line = content
+            if pat.regex.is_match(&executable_content) {
+                let matched_index = executable_content
                     .lines()
-                    .find(|line| pat.regex.is_match(line))
-                    .map(|line| line.trim().to_string());
+                    .position(|line| pat.regex.is_match(line));
+                let matched_line = matched_index.and_then(|index| {
+                    content
+                        .lines()
+                        .nth(index)
+                        .map(|line| line.trim().to_string())
+                });
                 signals.push(Signal {
                     id: pat.id.clone(),
                     category: SignalCategory::Pkgbuild,
@@ -30,6 +36,47 @@ impl Feature for InstallScriptAnalysis {
                     matched_line,
                 });
             }
+        }
+
+        let js_packages = crate::shared::js_package_manager::analyze(&executable_content);
+        if let Some(install) = js_packages.named_installs.first() {
+            signals.push(Signal {
+                id: "P-INSTALL-NAMED-JS-PACKAGE".to_string(),
+                category: SignalCategory::Pkgbuild,
+                points: 90,
+                description: format!(
+                    "Install script fetches named package through {}: {}",
+                    install.manager, install.package
+                ),
+                is_override_gate: false,
+                matched_line: Some(install.matched_line.clone()),
+            });
+        }
+        if let Some(ioc) = js_packages.known_june_iocs.first() {
+            signals.push(Signal {
+                id: "P-JUNE-2026-JS-IOC".to_string(),
+                category: SignalCategory::Pkgbuild,
+                points: 90,
+                description: format!(
+                    "Named install references known June 2026 incident dependency: {}",
+                    ioc.package
+                ),
+                is_override_gate: false,
+                matched_line: Some(ioc.matched_line.clone()),
+            });
+        }
+        if let Some(matched_line) =
+            crate::shared::js_package_manager::find_privileged_chmod(&executable_content)
+        {
+            signals.push(Signal {
+                id: "P-INSTALL-SUID-SGID".to_string(),
+                category: SignalCategory::Pkgbuild,
+                points: 90,
+                description: "Install script creates or changes a file with SUID/SGID mode"
+                    .to_string(),
+                is_override_gate: false,
+                matched_line: Some(matched_line),
+            });
         }
 
         signals
@@ -53,7 +100,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        InstallScriptAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        InstallScriptAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -118,6 +169,12 @@ mod tests {
     fn install_base64() {
         let ids = analyze("echo payload | base64 -d > /tmp/evil");
         assert!(has(&ids, "P-INSTALL-BASE64"));
+    }
+
+    #[test]
+    fn install_comment_does_not_trigger_base64() {
+        let ids = analyze("# For debugging, decode with base64 -d\npost_install() { :; }");
+        assert!(!has(&ids, "P-INSTALL-BASE64"), "got: {ids:?}");
     }
 
     #[test]
@@ -252,7 +309,8 @@ mod tests {
 
     #[test]
     fn benign_install_no_signals() {
-        let ids = analyze(r#"
+        let ids = analyze(
+            r#"
 post_install() {
     echo "Package installed successfully"
     echo "Run 'myapp --help' to get started"
@@ -261,7 +319,11 @@ post_install() {
 post_upgrade() {
     echo "Package upgraded to $1"
 }
-"#);
-        assert!(ids.is_empty(), "Benign install script should trigger no signals, got: {ids:?}");
+"#,
+        );
+        assert!(
+            ids.is_empty(),
+            "Benign install script should trigger no signals, got: {ids:?}"
+        );
     }
 }

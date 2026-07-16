@@ -58,6 +58,21 @@ pub fn load_config() -> Config {
     }
 }
 
+/// Load config without hiding malformed or unreadable state.
+///
+/// Missing config still means defaults, but security gates use this variant so
+/// an existing config that cannot be interpreted blocks the build instead of
+/// silently changing whitelist or ignored-signal behavior.
+pub fn load_config_strict() -> Result<Config, String> {
+    let path = config_path();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => toml::from_str(&content)
+            .map_err(|error| format!("Failed to parse config {}: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(error) => Err(format!("Failed to read config {}: {error}", path.display())),
+    }
+}
+
 /// Save config to ~/.config/bewaur/config.toml, creating directory if needed.
 pub fn save_config(config: &Config) -> Result<(), String> {
     let path = config_path();
@@ -115,7 +130,12 @@ pub fn is_signal_ignored(
     // Check category-level ignore
     if !config.ignored.categories.is_empty() {
         let cat_str = format!("{:?}", signal_category);
-        if config.ignored.categories.iter().any(|c| c.eq_ignore_ascii_case(&cat_str)) {
+        if config
+            .ignored
+            .categories
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(&cat_str))
+        {
             return true;
         }
     }
@@ -137,7 +157,12 @@ pub fn is_signal_ignored(
 /// Add a category to the ignored list and persist to disk.
 pub fn add_category_to_ignored(category: &str) -> Result<(), String> {
     let mut config = load_config();
-    if !config.ignored.categories.iter().any(|c| c.eq_ignore_ascii_case(category)) {
+    if !config
+        .ignored
+        .categories
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(category))
+    {
         config.ignored.categories.push(category.to_string());
         config.ignored.categories.sort();
     }
@@ -147,13 +172,18 @@ pub fn add_category_to_ignored(category: &str) -> Result<(), String> {
 /// Remove a category from the ignored list and persist to disk.
 pub fn remove_category_from_ignored(category: &str) -> Result<(), String> {
     let mut config = load_config();
-    config.ignored.categories.retain(|c| !c.eq_ignore_ascii_case(category));
+    config
+        .ignored
+        .categories
+        .retain(|c| !c.eq_ignore_ascii_case(category));
     save_config(&config)
 }
 
 pub fn config_path() -> std::path::PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return std::path::PathBuf::from(xdg).join("bewaur").join("config.toml");
+        return std::path::PathBuf::from(xdg)
+            .join("bewaur")
+            .join("config.toml");
     }
 
     // When running under sudo/doas (e.g. ALPM hook), resolve the invoking

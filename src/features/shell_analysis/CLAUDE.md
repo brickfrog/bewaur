@@ -10,11 +10,26 @@ Tracks variable assignments (`VAR=value`) and resolves `$VAR`/`${VAR}` reference
 ### Indirect Execution (SA-INDIRECT-EXEC)
 Detects variables holding dangerous command names (`bash`, `curl`, `python`, etc.) used in execution position (after `|`, at line start, after `;`/`&&`/`||`).
 
+### Quoted Command Reconstruction (SA-QUOTED-DOWNLOAD-EXEC)
+Lexes shell command words without executing them so adjacent quote or escape
+fragments such as `cu""rl | ba''sh` cannot bypass download-and-execute gates.
+Quoted prose and comment text do not create executable pipeline tokens. The
+lexer understands common `sudo`, `command`, `env`, and `exec` wrappers, follows
+only literal `sh`/`bash -c` and `eval` strings, and analyzes heredoc bodies only
+when they feed an interpreter directly or through `cat | interpreter`.
+Downloader-stdout and interpreter-stdin redirections take precedence over a
+pipe, matching shell fd behavior. Dynamic shell strings and process
+substitutions remain deliberately unanalyzed rather than guessed.
+
 ### Char-by-Char Construction (SA-CHARBYCHAR-CONSTRUCT)
 Detects 3+ `$(printf '\xNN')` or `$(echo -e '\xNN')` subshells on a single line, indicating character-by-character command assembly.
 
 ### Data Blob Detection (SA-DATA-BLOB-HEX, SA-DATA-BLOB-BASE64, SA-HIGH-ENTROPY-HEREDOC)
-Flags long hex strings (128+ chars, excluding checksums), long base64 strings (100+ chars), and heredocs with Shannon entropy > 5.0 bits/byte.
+Flags long hex strings (129+ chars, so SHA-512 values remain excluded), long base64 strings
+(100+ chars), and heredocs with Shannon entropy > 5.0 bits/byte only when the
+heredoc flows directly into an interpreter or decoder. Arithmetic shifts do
+not mask later heredocs, and escaped or mixed-quote delimiters undergo the same
+quote removal as Bash before matching their terminator.
 
 ### Binary Download Heuristic (SA-BINARY-DOWNLOAD-NOCOMPILE)
 Flags when a PKGBUILD downloads a file (`curl -o`/`wget -O`) and `chmod +x` it without any build commands (`make`, `cmake`, `cargo`, `gcc`, etc.).
@@ -31,6 +46,7 @@ Flags when a PKGBUILD downloads a file (`curl -o`/`wget -O`) and `chmod +x` it w
 | SA-DATA-BLOB-BASE64 | 50 | no | Long base64 string (encoded payload) |
 | SA-HIGH-ENTROPY-HEREDOC | 55 | no | High-entropy heredoc content |
 | SA-BINARY-DOWNLOAD-NOCOMPILE | 60 | no | Download + chmod +x, no compilation |
+| SA-QUOTED-DOWNLOAD-EXEC | 90 | yes | Quoted/escaped download-to-interpreter pipeline |
 
 All signals use `SignalCategory::Pkgbuild` (weight 0.45). Install script signals use the same IDs with `IS-` prefix (e.g., `IS-SA-VAR-CONCAT-EXEC`).
 

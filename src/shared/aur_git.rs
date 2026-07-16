@@ -6,9 +6,12 @@ use std::time::{Duration, Instant};
 const AUR_GIT_BASE: &str = "https://aur.archlinux.org";
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Clone or update the AUR git repo for a package. Returns the local path.
-pub fn ensure_repo(package_base: &str, cache_dir: &str) -> Result<PathBuf, String> {
+/// Validate an AUR package base before it is used as a cache path or URL
+/// component. Keeping this check shared prevents cache-management commands from
+/// accepting paths that clone operations would reject.
+pub fn validate_package_name(package_base: &str) -> Result<(), String> {
     if package_base.is_empty()
+        || package_base.starts_with(['-', '.'])
         || !package_base
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+' | '@'))
@@ -16,6 +19,12 @@ pub fn ensure_repo(package_base: &str, cache_dir: &str) -> Result<PathBuf, Strin
     {
         return Err(format!("invalid package name: {package_base}"));
     }
+    Ok(())
+}
+
+/// Clone or update the AUR git repo for a package. Returns the local path.
+pub fn ensure_repo(package_base: &str, cache_dir: &str) -> Result<PathBuf, String> {
+    validate_package_name(package_base)?;
 
     let repo_path = PathBuf::from(cache_dir).join(package_base);
 
@@ -29,10 +38,12 @@ pub fn ensure_repo(package_base: &str, cache_dir: &str) -> Result<PathBuf, Strin
     } else {
         // Shallow clone
         let url = format!("{AUR_GIT_BASE}/{package_base}.git");
-        let output = run_with_timeout(
-            Command::new("git")
-                .args(["clone", "--depth=50", &url, repo_path.to_str().unwrap()]),
-        )?;
+        let output = run_with_timeout(Command::new("git").args([
+            "clone",
+            "--depth=50",
+            &url,
+            repo_path.to_str().unwrap(),
+        ]))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -206,17 +217,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_dot_and_hyphen_prefixed_names() {
+        assert!(validate_package_name(".").is_err());
+        assert!(validate_package_name(".hidden").is_err());
+        assert!(validate_package_name("-option").is_err());
+    }
+
+    #[test]
     fn accepts_valid_package_name() {
         // Should pass validation — may succeed or fail on clone, but not on validation
         if let Err(e) = ensure_repo("yay", "/tmp/bewaur-test-nonexistent") {
-            assert!(!e.contains("invalid package name"), "valid name rejected: {e}");
+            assert!(
+                !e.contains("invalid package name"),
+                "valid name rejected: {e}"
+            );
         }
     }
 
     #[test]
     fn accepts_complex_valid_name() {
         if let Err(e) = ensure_repo("lib32-mesa+utils", "/tmp/bewaur-test-nonexistent") {
-            assert!(!e.contains("invalid package name"), "valid name rejected: {e}");
+            assert!(
+                !e.contains("invalid package name"),
+                "valid name rejected: {e}"
+            );
         }
     }
 }

@@ -23,6 +23,17 @@ const SECURITY_KEYWORDS: &[&str] = &[
 
 pub struct AurCommentsAnalysis;
 
+fn preview(comment: &str, max_chars: usize) -> String {
+    let mut chars = comment.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
 impl Feature for AurCommentsAnalysis {
     fn analyze(&self, ctx: &PackageContext) -> Vec<Signal> {
         if ctx.aur_comments.is_empty() {
@@ -33,11 +44,6 @@ impl Feature for AurCommentsAnalysis {
             let lower = comment.to_lowercase();
             for keyword in SECURITY_KEYWORDS {
                 if lower.contains(keyword) {
-                    let truncated = if comment.len() > 120 {
-                        format!("{}...", &comment[..120])
-                    } else {
-                        comment.clone()
-                    };
                     return vec![Signal {
                         id: "M-COMMENTS-SECURITY".to_string(),
                         category: SignalCategory::Metadata,
@@ -46,7 +52,7 @@ impl Feature for AurCommentsAnalysis {
                             "AUR comment mentions security concern (keyword: {keyword})"
                         ),
                         is_override_gate: false,
-                        matched_line: Some(truncated),
+                        matched_line: Some(preview(comment, 120)),
                     }];
                 }
             }
@@ -120,11 +126,31 @@ mod tests {
 
     #[test]
     fn emits_only_one_signal() {
-        let ids = analyze_comments(vec![
-            "This is malware",
-            "Also a trojan",
-            "And a backdoor",
-        ]);
+        let ids = analyze_comments(vec!["This is malware", "Also a trojan", "And a backdoor"]);
         assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn preview_truncates_at_a_utf8_character_boundary() {
+        let comment = format!("malware {}suffix", "🦀".repeat(120));
+        let ctx = PackageContext {
+            name: "test".into(),
+            metadata: None,
+            pkgbuild_content: None,
+            install_script_content: None,
+            prior_pkgbuild_content: None,
+            git_log: vec![],
+            maintainer_packages: vec![],
+            github_stars: None,
+            github_not_found: false,
+            aur_comments: vec![comment],
+        };
+
+        let signals = AurCommentsAnalysis.analyze(&ctx);
+        let matched_line = signals[0].matched_line.as_deref().unwrap();
+
+        assert_eq!(matched_line.chars().count(), 123);
+        assert!(matched_line.ends_with("..."));
+        assert!(!signals[0].is_override_gate);
     }
 }

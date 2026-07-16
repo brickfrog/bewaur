@@ -12,6 +12,18 @@ impl Feature for GtfobinsAnalysis {
 
         if let Some(ref content) = ctx.pkgbuild_content {
             signals.extend(match_patterns(content, "", ""));
+            if let Some(matched_line) =
+                crate::shared::js_package_manager::find_privileged_install(content)
+            {
+                signals.push(Signal {
+                    id: "G-INSTALL-SUID".to_string(),
+                    category: SignalCategory::Pkgbuild,
+                    points: 70,
+                    description: "install with SUID/SGID mode bits".to_string(),
+                    is_override_gate: false,
+                    matched_line: Some(matched_line),
+                });
+            }
         }
         if let Some(ref content) = ctx.install_script_content {
             signals.extend(match_patterns(content, "IS-", "(in install script)"));

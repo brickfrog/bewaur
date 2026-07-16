@@ -48,6 +48,17 @@ enum Commands {
         #[arg(short = 'f', long)]
         flagged_only: bool,
     },
+    /// Fail-closed scan of the exact local tree before an AUR helper builds it
+    Gate {
+        /// Paru build directory containing PKGBUILD and .SRCINFO
+        #[arg(long, value_name = "DIR")]
+        build_dir: std::path::PathBuf,
+    },
+    /// Inspect or prune cached AUR Git repositories
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommands,
+    },
     /// Whitelist a package (skip future scans)
     Allow {
         /// Package name to whitelist
@@ -89,6 +100,26 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum CacheCommands {
+    /// Show the number and exact size of cached AUR Git repositories
+    Stats,
+    /// Remove one cached package base, or every entry with an explicit --all
+    Clean {
+        /// Package base whose cached repository should be removed
+        #[arg(
+            value_name = "PACKAGE_BASE",
+            required_unless_present = "all",
+            conflicts_with = "all"
+        )]
+        package: Option<String>,
+
+        /// Remove every entry from the AUR Git cache
+        #[arg(long)]
+        all: bool,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -101,15 +132,134 @@ fn main() {
             json,
             verbose,
             flagged_only,
-        } => cmd_scan(package, pkgbuild, all_installed, jobs, json, verbose, flagged_only),
+        } => cmd_scan(
+            package,
+            pkgbuild,
+            all_installed,
+            jobs,
+            json,
+            verbose,
+            flagged_only,
+        ),
+        Commands::Gate { build_dir } => cmd_gate(&build_dir),
+        Commands::Cache { command } => cmd_cache(command),
         Commands::Allow { package } => cmd_allow(&package),
         Commands::Bench { count, jobs } => bench::run(count, jobs),
         Commands::Signals { json } => cmd_signals(json),
-        Commands::Ignore { signal_id, category } => cmd_ignore(signal_id.as_deref(), category.as_deref()),
-        Commands::Unignore { signal_id, category } => cmd_unignore(signal_id.as_deref(), category.as_deref()),
+        Commands::Ignore {
+            signal_id,
+            category,
+        } => cmd_ignore(signal_id.as_deref(), category.as_deref()),
+        Commands::Unignore {
+            signal_id,
+            category,
+        } => cmd_unignore(signal_id.as_deref(), category.as_deref()),
     };
 
     process::exit(exit_code);
+}
+
+fn cmd_cache(command: CacheCommands) -> i32 {
+    match command {
+        CacheCommands::Stats => match shared::cache::git_cache_stats() {
+            Ok(stats) => {
+                println!(
+                    "Git cache: {} repositories, {} bytes",
+                    stats.repositories, stats.bytes
+                );
+                0
+            }
+            Err(error) => {
+                eprintln!("bewaur cache: {error}");
+                1
+            }
+        },
+        CacheCommands::Clean { package, all } => {
+            let package_base = if all { None } else { package.as_deref() };
+            match shared::cache::clean_git_cache(package_base) {
+                Ok(removed) => {
+                    println!("Removed {removed} cached repositories.");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("bewaur cache: {error}");
+                    1
+                }
+            }
+        }
+    }
+}
+
+fn cmd_gate(build_dir: &std::path::Path) -> i32 {
+    use shared::config::is_whitelisted_in;
+    use shared::scoring::Tier;
+
+    let expected_pkgbase = match std::env::var("PKGBASE") {
+        Ok(pkgbase) if !pkgbase.is_empty() => pkgbase,
+        Ok(_) => {
+            eprintln!(
+                "bewaur gate: PKGBASE is empty; invoke this command through Paru PreBuildCommand"
+            );
+            return 1;
+        }
+        Err(error) => {
+            eprintln!(
+                "bewaur gate: PKGBASE is unavailable ({error}); invoke this command through Paru PreBuildCommand"
+            );
+            return 1;
+        }
+    };
+
+    let manifest = match shared::local_build::load_build_manifest(build_dir, &expected_pkgbase) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("bewaur gate: {error}");
+            return 1;
+        }
+    };
+
+    let config = match shared::config::load_config_strict() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("bewaur gate: {error}");
+            return 1;
+        }
+    };
+
+    if is_whitelisted_in(&config, manifest.pkgbase()) {
+        eprintln!(
+            "bewaur gate: package base {} is whitelisted; allowing build",
+            manifest.pkgbase()
+        );
+        return 0;
+    }
+
+    let tree = match shared::local_build::load_build_tree_from_manifest(manifest) {
+        Ok(tree) => tree,
+        Err(error) => {
+            eprintln!("bewaur gate: {error}");
+            return 1;
+        }
+    };
+
+    let pkgbuild_analysis_content = tree.pkgbuild_analysis_content();
+    let result = coordinator::scan_local_build_with_config(
+        &tree.pkgbase,
+        &pkgbuild_analysis_content,
+        tree.install_script_content.as_deref(),
+        &config,
+    );
+    shared::output::print_text(&result, true);
+
+    if result.tier >= Tier::Sketchy {
+        eprintln!(
+            "bewaur gate: {} package blocked before build; review the findings or run 'bewaur allow {}' to bypass",
+            result.tier, tree.pkgbase
+        );
+        1
+    } else {
+        0
+    }
 }
 
 fn cmd_scan(
@@ -140,7 +290,11 @@ fn cmd_scan(
         } else {
             shared::output::print_text(&result, verbose);
         }
-        return if result.tier >= shared::scoring::Tier::Suspicious { 1 } else { 0 };
+        return if result.tier >= shared::scoring::Tier::Suspicious {
+            1
+        } else {
+            0
+        };
     }
 
     if let Some(pkg) = package {
@@ -168,7 +322,9 @@ fn cmd_scan_single(pkg: &str, json: bool, verbose: bool) -> i32 {
 }
 
 fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: bool) -> i32 {
-    use crate::shared::bulk::{batch_fetch_metadata, clone_with_retry, prefetch_maintainer_packages};
+    use crate::shared::bulk::{
+        batch_fetch_metadata, clone_with_retry, prefetch_maintainer_packages,
+    };
     use crate::shared::scoring::{ScanResult, Tier};
     use colored::Colorize;
     use indicatif::{ProgressBar, ProgressStyle};
@@ -187,7 +343,10 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
         }
     };
 
-    eprintln!("  Fetching package metadata for {} installed packages...", names.len());
+    eprintln!(
+        "  Fetching package metadata for {} installed packages...",
+        names.len()
+    );
     let metadata = match batch_fetch_metadata(&names) {
         Ok(metadata) => metadata,
         Err(e) => {
@@ -201,14 +360,15 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
         .map(|n| n.as_str())
         .collect();
     if !not_found.is_empty() {
-        eprintln!("  Skipping {} not on AUR: {}", not_found.len(), not_found.join(", "));
+        eprintln!(
+            "  Skipping {} not on AUR: {}",
+            not_found.len(),
+            not_found.join(", ")
+        );
         names.retain(|n| metadata.contains_key(n.as_str()));
     }
     let total = names.len();
-    eprintln!(
-        "{}",
-        format!("Scanning {} AUR packages...", total).bold()
-    );
+    eprintln!("{}", format!("Scanning {} AUR packages...", total).bold());
 
     let maintainer_packages = prefetch_maintainer_packages(&metadata);
 
@@ -305,7 +465,11 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
                 format!(
                     "=== {} {} ===",
                     flagged.len(),
-                    if flagged_only { "flagged packages (SKETCHY+)" } else { "packages" }
+                    if flagged_only {
+                        "flagged packages (SKETCHY+)"
+                    } else {
+                        "packages"
+                    }
                 )
                 .bold()
             );
@@ -319,9 +483,21 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
         }
     }
 
-    let has_critical = tier_counts[3].load(Ordering::Relaxed) > 0
-        || tier_counts[4].load(Ordering::Relaxed) > 0;
-    if has_critical { 1 } else { 0 }
+    bulk_scan_exit_code(
+        errors,
+        tier_counts[3].load(Ordering::Relaxed),
+        tier_counts[4].load(Ordering::Relaxed),
+    )
+}
+
+/// Bulk scans are security checks: an unscanned package is a failure just like
+/// a suspicious or malicious result.
+fn bulk_scan_exit_code(errors: usize, suspicious: u64, malicious: u64) -> i32 {
+    if errors > 0 || suspicious > 0 || malicious > 0 {
+        1
+    } else {
+        0
+    }
 }
 
 /// Get list of installed AUR (foreign) package names via `pacman -Qm`.
@@ -382,7 +558,9 @@ fn cmd_signals(json: bool) -> i32 {
             return true;
         }
         let cat_str = format!("{:?}", d.category);
-        ignored_categories.iter().any(|c| c.eq_ignore_ascii_case(&cat_str))
+        ignored_categories
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(&cat_str))
     };
 
     if json {
@@ -423,10 +601,7 @@ fn cmd_signals(json: bool) -> i32 {
         for d in &cat_defs {
             let sig_ignored = is_ignored(d);
             let marker = if sig_ignored { " [IGNORED]" } else { "" };
-            println!(
-                "  {:<36} {}{}",
-                d.id, d.description, marker
-            );
+            println!("  {:<36} {}{}", d.id, d.description, marker);
             total += 1;
             if sig_ignored {
                 ignored_count += 1;
@@ -457,7 +632,10 @@ fn cmd_ignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
                     eprintln!("  Saved to {}", shared::config::config_path().display());
                     0
                 }
-                Err(e) => { eprintln!("Error: {e}"); 1 }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    1
+                }
             }
         }
         (None, Some(cat)) => {
@@ -472,7 +650,10 @@ fn cmd_ignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
                     eprintln!("  Saved to {}", shared::config::config_path().display());
                     0
                 }
-                Err(e) => { eprintln!("Error: {e}"); 1 }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    1
+                }
             }
         }
         _ => {
@@ -484,16 +665,17 @@ fn cmd_ignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
 
 fn cmd_unignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
     match (signal_id, category) {
-        (Some(id), None) => {
-            match shared::config::remove_from_ignored(id) {
-                Ok(()) => {
-                    eprintln!("Unignored: {id}");
-                    eprintln!("  Saved to {}", shared::config::config_path().display());
-                    0
-                }
-                Err(e) => { eprintln!("Error: {e}"); 1 }
+        (Some(id), None) => match shared::config::remove_from_ignored(id) {
+            Ok(()) => {
+                eprintln!("Unignored: {id}");
+                eprintln!("  Saved to {}", shared::config::config_path().display());
+                0
             }
-        }
+            Err(e) => {
+                eprintln!("Error: {e}");
+                1
+            }
+        },
         (None, Some(cat)) => {
             if shared::signal_registry::category_from_str(cat).is_none() {
                 eprintln!("Unknown category: {cat}");
@@ -506,12 +688,36 @@ fn cmd_unignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
                     eprintln!("  Saved to {}", shared::config::config_path().display());
                     0
                 }
-                Err(e) => { eprintln!("Error: {e}"); 1 }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    1
+                }
             }
         }
         _ => {
             eprintln!("Provide either a signal ID or --category, not both.");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bulk_scan_exit_code;
+
+    #[test]
+    fn bulk_scan_fails_closed_when_any_package_cannot_be_scanned() {
+        assert_eq!(bulk_scan_exit_code(1, 0, 0), 1);
+    }
+
+    #[test]
+    fn bulk_scan_preserves_critical_tier_failures() {
+        assert_eq!(bulk_scan_exit_code(0, 1, 0), 1);
+        assert_eq!(bulk_scan_exit_code(0, 0, 1), 1);
+    }
+
+    #[test]
+    fn bulk_scan_succeeds_when_every_scan_is_below_suspicious() {
+        assert_eq!(bulk_scan_exit_code(0, 0, 0), 0);
     }
 }

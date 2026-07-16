@@ -23,6 +23,22 @@ fn malicious_curl_pipe_triggers_override_gate() {
 }
 
 #[test]
+fn quote_split_download_execute_triggers_override_gate() {
+    let pkgbuild = include_str!("fixtures/malicious/quote_split_download_exec.PKGBUILD");
+    let result = scan_pkgbuild("quote-split-payload", pkgbuild);
+
+    assert_eq!(
+        result.tier,
+        Tier::Malicious,
+        "Bash quote concatenation must not hide curl-to-bash execution"
+    );
+    assert_eq!(
+        result.override_gate_fired.as_deref(),
+        Some("SA-QUOTED-DOWNLOAD-EXEC")
+    );
+}
+
+#[test]
 fn malicious_pkgbuild_accumulates_cross_feature_signals() {
     let pkgbuild = include_str!("fixtures/malicious/curl_pipe_bash.PKGBUILD");
     let result = scan_pkgbuild("firefox-fix-bin", pkgbuild);

@@ -31,6 +31,12 @@ The following GTFOBins patterns were evaluated and excluded:
 
 All signal IDs use the `G-` prefix for PKGBUILD matches and `IS-G-` prefix for install script matches. Override gates are set for patterns that are unambiguously malicious (reverse shells, download-and-execute pipes, tar checkpoint exec).
 
+`G-INSTALL-SUID` is the exception to the regex-backed rules: it uses the shared
+active-shell parser so `install -m/--mode` examples in arrays, prose, or inert
+heredocs cannot signal. Install scripts use the higher-severity
+`P-INSTALL-SUID-SGID` signal from install-script analysis instead of emitting a
+duplicate `IS-G-INSTALL-SUID`.
+
 ## Scope
 
 Runs all 117 patterns against both `pkgbuild_content` and `install_script_content`.

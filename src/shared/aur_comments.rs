@@ -2,12 +2,13 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 static COMMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<div class="article-content"[^>]*>([\s\S]*?)</div>"#).unwrap()
+    Regex::new(
+        r#"<div\b[^>]*\bclass\s*=\s*["'][^"']*\barticle-content\b[^"']*["'][^>]*>([\s\S]*?)</div>"#,
+    )
+    .unwrap()
 });
 
-static HTML_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<[^>]+>").unwrap()
-});
+static HTML_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
 
 /// Fetch recent comments from an AUR package page.
 /// Returns comment text strings (HTML stripped). Empty vec on error.
@@ -61,6 +62,17 @@ fn html_entities_decode(s: &str) -> String {
 mod tests {
     use super::*;
 
+    // Representative of current AUR package-page markup: the comment id appears
+    // before the article-content class, and the body contains nested elements.
+    const CURRENT_AUR_COMMENT_HTML: &str = r##"
+        <div id="comment-2563149" class="comment-header">
+            <h4><a href="#comment-2563149">user commented on 2026-07-06</a></h4>
+        </div>
+        <div id="comment-2563149-content" class="article-content">
+            <p>The package now works with <code>foo &amp; bar</code> successfully.</p>
+        </div>
+    "##;
+
     #[test]
     fn extracts_comments_from_html() {
         let html = r#"
@@ -78,6 +90,21 @@ mod tests {
     #[test]
     fn handles_empty_html() {
         assert!(extract_comments("").is_empty());
+    }
+
+    #[test]
+    fn extracts_comment_when_id_precedes_article_content_class() {
+        assert_eq!(
+            extract_comments(CURRENT_AUR_COMMENT_HTML),
+            vec!["The package now works with foo & bar successfully."]
+        );
+    }
+
+    #[test]
+    fn recognizes_article_content_among_multiple_classes() {
+        let html =
+            r#"<div id="comment-1-content" class="prose article-content formatted">Body</div>"#;
+        assert_eq!(extract_comments(html), vec!["Body"]);
     }
 
     #[test]

@@ -24,10 +24,7 @@ pub fn build_context(package_name: &str) -> Result<PackageContext, String> {
     let metadata = aur_rpc::fetch_package_info(package_name)?;
 
     // Determine package base (for split packages)
-    let package_base = metadata
-        .package_base
-        .as_deref()
-        .unwrap_or(package_name);
+    let package_base = metadata.package_base.as_deref().unwrap_or(package_name);
 
     // Clone/pull the AUR git repo
     let git_cache = cache::git_cache_dir();
@@ -65,7 +62,12 @@ pub fn build_context(package_name: &str) -> Result<PackageContext, String> {
         .url
         .as_deref()
         .and_then(|url| github::fetch_github_stars(url))
-        .map(|info| (if info.found { Some(info.stars) } else { None }, !info.found))
+        .map(|info| {
+            (
+                if info.found { Some(info.stars) } else { None },
+                !info.found,
+            )
+        })
         .unwrap_or((None, false));
 
     // Fetch recent AUR comments
@@ -94,10 +96,7 @@ pub fn build_context_prefetched(
 ) -> Result<PackageContext, String> {
     use crate::shared::{aur_comments, aur_git, cache, github};
 
-    let package_base = metadata
-        .package_base
-        .as_deref()
-        .unwrap_or(package_name);
+    let package_base = metadata.package_base.as_deref().unwrap_or(package_name);
 
     let git_cache = cache::git_cache_dir();
     let cache_str = git_cache.to_str().unwrap_or("/tmp/bewaur-git");
@@ -124,7 +123,12 @@ pub fn build_context_prefetched(
         .url
         .as_deref()
         .and_then(|url| github::fetch_github_stars(url))
-        .map(|info| (if info.found { Some(info.stars) } else { None }, !info.found))
+        .map(|info| {
+            (
+                if info.found { Some(info.stars) } else { None },
+                !info.found,
+            )
+        })
         .unwrap_or((None, false));
 
     let comments = aur_comments::fetch_recent_comments(package_base);
@@ -145,19 +149,41 @@ pub fn build_context_prefetched(
 
 /// Scan a local PKGBUILD string without network access.
 pub fn scan_pkgbuild(name: &str, pkgbuild_content: &str) -> ScanResult {
-    let ctx = PackageContext {
+    let ctx = local_build_context(name, pkgbuild_content, None);
+    run_analysis(&ctx)
+}
+
+/// Scan a local build tree's inert contents with an already-loaded config.
+///
+/// This is the pre-build equivalent of `scan_pkgbuild`, with the referenced
+/// install scripts included in the same analysis pass.
+pub fn scan_local_build_with_config(
+    name: &str,
+    pkgbuild_content: &str,
+    install_script_content: Option<&str>,
+    config: &crate::shared::config::Config,
+) -> ScanResult {
+    let ctx = local_build_context(name, pkgbuild_content, install_script_content);
+    run_analysis_with_config(&ctx, config)
+}
+
+fn local_build_context(
+    name: &str,
+    pkgbuild_content: &str,
+    install_script_content: Option<&str>,
+) -> PackageContext {
+    PackageContext {
         name: name.to_string(),
         metadata: None,
         pkgbuild_content: Some(pkgbuild_content.to_string()),
-        install_script_content: None,
+        install_script_content: install_script_content.map(str::to_string),
         prior_pkgbuild_content: None,
         git_log: Vec::new(),
         maintainer_packages: Vec::new(),
         github_stars: None,
         github_not_found: false,
         aur_comments: vec![],
-    };
-    run_analysis(&ctx)
+    }
 }
 
 /// Run all registered features against the context and compute a score.

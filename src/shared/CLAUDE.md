@@ -11,12 +11,15 @@ Reusable modules consumed by features and the coordinator. Code goes here if it'
 | `aur_git.rs` | Git clone/pull/diff/log operations | coordinator, pkgbuild, install_script, git_history features |
 | `scoring.rs` | `Signal`, `SignalCategory`, `Tier`, `ScanResult`, `compute_score()` | coordinator |
 | `patterns.rs` | Load TOML pattern rules, compile to regex | pkgbuild, install_script, source_url, gtfobins features |
-| `cache.rs` | Cache directory management (XDG_CACHE_HOME) | aur_git, aur_rpc |
+| `cache.rs` | XDG cache paths plus non-symlink-following stats and validated, explicit Git-cache pruning | aur_git, aur_rpc, CLI |
 | `config.rs` | User config from ~/.config/bewaur/config.toml | coordinator |
 | `output.rs` | Colored text + JSON formatters for ScanResult | coordinator (via main.rs) |
 | `bulk.rs` | Count/URL-bounded metadata fetch, maintainer prefetch, clone-with-retry | bench, cmd_scan_all_installed, ALPM hook |
 | `github.rs` | GitHub API client (star count, repo existence). Supports `GITHUB_TOKEN` env var for higher rate limits | coordinator, github_stars feature |
 | `aur_comments.rs` | AUR package page HTML scraper for comment extraction | coordinator, aur_comments_analysis feature |
+| `js_package_manager.rs` | Non-executing active-shell parsing for named JS installs, June incident IOCs, dependency arrays, and privileged chmod/install modes | pkgbuild, install_script, pkgbuild_diff, gtfobins features |
+| `local_build.rs` | Inert `.SRCINFO`/PKGBUILD/install loader plus position-aware install extraction and bounded, lossy executable-helper discovery with canonical path confinement | pre-build gate |
+| `shell_syntax.rs` | Non-executing shell comment and command-word lexer | pattern and shell analysis |
 | `signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) | cmd_signals, cmd_ignore |
 
 ## When to put code here vs in a feature

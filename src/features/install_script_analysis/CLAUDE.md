@@ -11,16 +11,22 @@ Analyzes `.install` files (pre/post install/upgrade/remove hooks) for suspicious
 - **Profile modification**: Writing to .bashrc/.zshrc during install
 - **Credential access**: SSH keys, browser profiles, GPG keyring, /etc/passwd access
 - **Privilege escalation**: sudoers modification
+- **Privileged file modes**: active `chmod` or `install -m/--mode` setting SUID or SGID, symbolically or numerically
+- **Language package fetches**: named npm, pnpm, yarn, or bun installs; bare and local installs are excluded
 - **Anti-forensics**: history clearing, log clearing/truncation
 - **Obfuscation**: base64 decoding, eval in install scripts
 
 ## Signals emitted
 
-All signals use `SignalCategory::Pkgbuild` (weight 0.45). See `data/patterns.toml` section `install_script_analysis`.
+All signals use `SignalCategory::Pkgbuild` (weight 0.45). Named JS installs,
+known June incident dependencies, and privileged mode operations are emitted
+through the shared active-shell parser; the remaining rules are in the
+`install_script_analysis` section of `data/patterns.toml`.
 
 ## Dependencies
 
 - `shared/patterns.rs` — regex pattern matching (cached via OnceLock in `patterns.rs`)
+- `shared/js_package_manager.rs` — non-executing named-install parsing shared with PKGBUILD and diff analysis
 - `PackageContext.install_script_content` — the .install file content
 
 ## Known false positives

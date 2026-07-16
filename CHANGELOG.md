@@ -15,8 +15,21 @@
   a separate portable hook for standard Arch pacman.
 - **Batch metadata errors**: AUR RPC transport and response failures are no longer
   treated as packages missing from the AUR, which previously skipped trust scoring.
+- **Current AUR behavior**: restore comment extraction for the current HTML markup,
+  make bulk-scan operational errors nonzero, and correct checksum/source counting
+  plus checksum, comment, heredoc, and wallet-address false positives.
+- **Shell bypasses**: reconstruct quoted command words such as `cu""rl | ba''sh`
+  with wrapper, heredoc, and redirection-aware parsing instead of raw-text guesses.
 
 ### Added
+- **Paru pre-build gate**: `bewaur gate --build-dir .` inertly scans the exact,
+  path-confined build tree before `makepkg`, blocks `SKETCHY` and above, and fails
+  closed on operational or statically recognizable metadata-mutation errors.
+- **June 2026 incident defenses**: detect named npm/pnpm/yarn/bun installs, exact
+  incident dependencies, newly added manager behavior, correlated recent package
+  takeovers, and active SUID/SGID mode changes in PKGBUILDs and install scripts.
+- **Cache maintenance**: add safe `cache stats`, targeted `cache clean <base>`,
+  and explicit `cache clean --all` commands without following symlink entries.
 - **`-bin` source verification** (`bin_source_verification`): cross-references a `-bin` package's declared upstream URL against its `source=()` download domains. Detects fork impersonation when a package claims one GitHub org as upstream but downloads binaries from a different org. Emits `B-BIN-GITHUB-ORG-MISMATCH` (+50) and `B-BIN-DOMAIN-MISMATCH` (+30) behavioral signals.
 - **Orphan takeover detection** (`orphan_takeover_analysis`): New feature that deserializes the `Submitter` field from AUR RPC and compares it against the current `Maintainer`. Emits `B-SUBMITTER-CHANGED` (+15, Behavioral) when they differ, and `B-ORPHAN-TAKEOVER` (+50, Behavioral) when combined with a git author change on an established package (>90 days). Detects the acroread-style attack vector where an attacker adopts an orphaned package and injects malicious code.
 - `AurPackage` now deserializes `submitter` and `last_modified` from AUR RPC v5 responses.

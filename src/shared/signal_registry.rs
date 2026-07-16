@@ -84,6 +84,11 @@ fn hardcoded_signals() -> Vec<SignalDef> {
         ("M-GITHUB-NOT-FOUND", Metadata, 25, "Upstream URL points to GitHub but repo does not exist", false),
         // pkgbuild_diff_analysis
         ("T-DIFF-NEW-SUSPICIOUS", Temporal, 40, "Newly introduced suspicious pattern not in prior version", false),
+        ("T-DIFF-NEW-JS-MANAGER-DEP", Temporal, 35, "Current update adds an npm, pnpm, yarn, or bun dependency", false),
+        ("T-DIFF-NEW-NAMED-JS-INSTALL", Temporal, 55, "Current update adds a named npm, pnpm, yarn, or bun install", false),
+        ("T-DIFF-NEW-JUNE-2026-IOC", Temporal, 80, "Current update adds a known June 2026 incident dependency", false),
+        ("B-TAKEOVER-NAMED-JS-INSTALL", Behavioral, 95, "Recently updated established adopted package has a new author and newly adds a named JS package-manager install", false),
+        ("B-RECENT-TAKEOVER-JUNE-2026-IOC", Behavioral, 98, "Recent maintainer-authored takeover update adds a known June 2026 incident dependency", true),
         ("T-DIFF-CHECKSUM-REMOVED", Temporal, 35, "Checksum array removed or all entries changed to SKIP", false),
         ("T-DIFF-SOURCE-DOMAIN-CHANGED", Temporal, 30, "Source URLs changed to a different domain", false),
         ("T-DIFF-MAJOR-REWRITE", Temporal, 15, ">50% of PKGBUILD lines changed (unusual for version bump)", false),
@@ -92,7 +97,14 @@ fn hardcoded_signals() -> Vec<SignalDef> {
         ("P-SKIP-ALL", Pkgbuild, 25, "All checksums are SKIP (no integrity verification)", false),
         ("P-WEAK-CHECKSUMS", Pkgbuild, 10, "Using weak checksums (md5/sha1) without stronger alternative", false),
         ("P-CHECKSUM-MISMATCH", Pkgbuild, 25, "Source count != checksum count", false),
+        // JavaScript package-manager analysis
+        ("P-NAMED-JS-PACKAGE-INSTALL", Pkgbuild, 45, "Build step installs a named package through npm, pnpm, yarn, or bun", false),
+        ("P-INSTALL-NAMED-JS-PACKAGE", Pkgbuild, 90, "Install script fetches a named package through npm, pnpm, yarn, or bun", false),
+        ("P-JUNE-2026-JS-IOC", Pkgbuild, 90, "Named install references a known June 2026 incident dependency", false),
+        ("P-INSTALL-SUID-SGID", Pkgbuild, 90, "Install script creates or changes a file with SUID/SGID mode", false),
+        ("G-INSTALL-SUID", Pkgbuild, 70, "install with SUID/SGID mode bits", false),
         // shell_analysis
+        ("SA-QUOTED-DOWNLOAD-EXEC", Pkgbuild, 90, "Quoted or escaped download-to-interpreter pipeline", true),
         ("SA-VAR-CONCAT-EXEC", Pkgbuild, 85, "Variable concatenation resolves to download-and-execute", true),
         ("SA-VAR-CONCAT-CMD", Pkgbuild, 55, "Variable concatenation resolves to dangerous command", false),
         ("SA-INDIRECT-EXEC", Pkgbuild, 70, "Variable with dangerous command in execution position", false),

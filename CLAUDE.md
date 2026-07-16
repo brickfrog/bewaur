@@ -88,6 +88,7 @@ prebuilt binary-release package.
 | `src/features/aur_comments_analysis/` | AUR comments scanning for security-related keywords |
 | `src/shared/github.rs` | GitHub API client (star count, repo existence) |
 | `src/shared/aur_comments.rs` | AUR package page comment scraper |
+| `src/shared/local_build.rs` | Inert, path-confined Paru build-tree loader for the pre-build gate |
 | `src/shared/signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) |
 | `src/shared/config.rs` | User config: whitelist, ignored signals/categories |
 | `data/patterns.toml` | Regex pattern database (239 patterns). Total signals: 279 (pattern + hardcoded) |
@@ -95,3 +96,17 @@ prebuilt binary-release package.
 | `hook/bewaur.hook` | ALPM hook definition |
 | `hook/bewaur-network.hook` | Network opt-in hook for pacman builds that isolate hooks |
 | `hook/bewaur-hook.rs` | Hook binary (filters AUR pkgs, runs scans) |
+
+## Pre-build gate
+
+`bewaur gate --build-dir .` is intended for Paru's `PreBuildCommand`. It reads
+the exact local PKGBUILD, `.SRCINFO`, referenced install scripts, and bounded
+local executable helpers without sourcing shell code. Literal PKGBUILD
+`install=` assignments and literal source arrays are checked independently of
+`.SRCINFO`; recognizable indirect install mutations fail closed, while arbitrary
+dynamic shell/source reconstruction is intentionally not claimed. Helper bytes
+are decoded lossily, and inert patches/docs/config are not concatenated as
+shell. Unlike the interactive scan command and ALPM hook, the gate blocks
+`SKETCHY` and every higher-risk tier, plus all operational errors. A validated
+package-base whitelist entry is an explicit total bypass of tree reads and trust
+findings.

