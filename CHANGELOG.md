@@ -9,6 +9,10 @@
   `~/.config/traur` and `~/.cache/traur` state is intentionally not migrated.
 
 ### Fixed
+- **Arch package linking**: use the system zstd library through pkg-config so
+  makepkg's GCC LTO flags cannot leave bundled zstd objects unresolved when
+  Rust links with lld. Declare the matching build/runtime dependencies and bump
+  the local package release.
 - **Complete, current scans**: network and hook scans now require a clean cache
   entry at the exact freshly fetched AUR `master` commit, reject stale or dirty
   repositories, and use the same path-confined `.SRCINFO`, install-script, and

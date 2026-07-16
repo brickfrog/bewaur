@@ -1,13 +1,13 @@
 # Maintainer: brickfrog
 pkgname=bewaur
 pkgver=0.4.1
-pkgrel=1
+pkgrel=2
 pkgdesc='Trust scoring for AUR packages'
 arch=('x86_64')
 url='https://github.com/brickfrog/bewaur'
 license=('MIT')
-depends=('git' 'pacman' 'gcc-libs' 'glibc' 'openssl' 'xz')
-makedepends=('cargo')
+depends=('git' 'pacman' 'gcc-libs' 'glibc' 'openssl' 'xz' 'zstd')
+makedepends=('cargo' 'pkgconf')
 conflicts=('traur' 'traur-bin')
 source=("$pkgname-$pkgver.tar.gz")
 sha256sums=('SKIP')
