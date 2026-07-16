@@ -88,9 +88,9 @@ prebuilt binary-release package.
 | `src/features/aur_comments_analysis/` | AUR comments scanning for security-related keywords |
 | `src/shared/github.rs` | GitHub API client (star count, repo existence) |
 | `src/shared/aur_comments.rs` | AUR package page comment scraper |
-| `src/shared/local_build.rs` | Inert, path-confined Paru build-tree loader for the pre-build gate |
+| `src/shared/local_build.rs` | Inert, path-confined Paru build-tree loader plus complete approval fingerprinting |
 | `src/shared/signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) |
-| `src/shared/config.rs` | User config: whitelist, ignored signals/categories |
+| `src/shared/config.rs` | Strict, locked, atomic user config: exact-tree approvals, explicit permanent allowances, ignored signals/categories |
 | `data/patterns.toml` | Regex pattern database (239 patterns). Total signals: 279 (pattern + hardcoded) |
 | `src/bench.rs` | Batch benchmark (parallel scan, retry, stats) |
 | `hook/bewaur.hook` | ALPM hook definition |
@@ -107,6 +107,7 @@ local executable helpers without sourcing shell code. Literal PKGBUILD
 dynamic shell/source reconstruction is intentionally not claimed. Helper bytes
 are decoded lossily, and inert patches/docs/config are not concatenated as
 shell. Unlike the interactive scan command and ALPM hook, the gate blocks
-`SKETCHY` and every higher-risk tier, plus all operational errors. A validated
-package-base whitelist entry is an explicit total bypass of tree reads and trust
-findings.
+`SKETCHY` and every higher-risk tier, plus all operational errors. Exact-tree
+approvals fingerprint every tree entry, including VCS state, remain visible to the scanner, and
+override only the final tier decision. Only an explicit package-base
+`allow --forever` is a total bypass of later tree reads and findings.

@@ -20,7 +20,7 @@ ALPM (pacman) hook integration for automatic pre-install scanning.
 7. Decision logic:
    - **All TRUSTED/OK**: prints "All packages look clean.", exits 0 — no prompt
    - **SKETCHY or SUSPICIOUS**: prints detail and prompts [y/N] with a controlling terminal; blocks when noninteractive
-   - **MALICIOUS**: prints detail, hard-blocks (exit 1), must whitelist to proceed
+   - **MALICIOUS**: prints detail and hard-blocks (exit 1); exact-tree review belongs at the Paru gate
    - **Scan errors**: hard-blocks (exit 1), fail-closed
 8. `AbortOnFail` in the hook definition causes pacman to abort on exit 1
 
@@ -50,4 +50,8 @@ rejects the extension's `NetworkAccess` key, so it must continue to receive
   TRUSTED/OK results pass but SKETCHY/SUSPICIOUS results block because nobody
   can approve them; MALICIOUS results always block.
 - **Fail closed**: If a scan errors out (git clone timeout, network failure, etc.), the hook blocks the transaction. Unscanned packages are not allowed through. Git operations have a 30-second timeout to prevent indefinite hangs. Packages not found on AUR are skipped (not treated as errors) since they are locally-built packages (e.g. `-debug` split packages).
+- **Authorization scope**: exact-tree approvals cannot apply because ALPM does
+  not provide the helper's checked-out tree. The hook resolves split outputs to
+  their AUR package base and honors only `allow <pkgbase> --forever`. Malformed,
+  legacy, or unreadable config blocks rather than silently becoming defaults.
 - **Official repo skip**: `pacman -Sl` is fast and reliable for filtering. AUR packages are not in sync databases.

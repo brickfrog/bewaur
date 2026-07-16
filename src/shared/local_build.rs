@@ -1,11 +1,18 @@
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 const MAX_LOCAL_SOURCE_BYTES: u64 = 1024 * 1024;
 const MAX_TOTAL_LOCAL_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
 const LOCAL_FILE_BOUNDARY: &str = "\n\n__bewaur_file_boundary__\n\n";
+const APPROVAL_DIGEST_DOMAIN: &[u8] = b"bewaur-build-tree-approval:v1:p1";
+const APPROVAL_DIGEST_PREFIX: &str = "sha256:v1:p1:";
+const MAX_APPROVAL_TREE_ENTRIES: usize = 200_000;
+const MAX_APPROVAL_TREE_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 
 /// Inert inputs loaded from the exact build tree an AUR helper is about to use.
 #[derive(Debug, PartialEq, Eq)]
@@ -82,6 +89,43 @@ struct LocalSourceCandidate {
     must_exist_before_build: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct FingerprintEntry {
+    entry_type: u8,
+    logical_path: Vec<u8>,
+    resolved_path: Vec<u8>,
+    mode: u32,
+    size: u64,
+    content_digest: [u8; 32],
+}
+
+#[derive(Default)]
+struct FingerprintState {
+    entries: Vec<FingerprintEntry>,
+    total_bytes: u64,
+}
+
+impl FingerprintState {
+    fn push(&mut self, entry: FingerprintEntry) -> Result<(), String> {
+        if self.entries.len() >= MAX_APPROVAL_TREE_ENTRIES {
+            return Err(format!(
+                "build tree exceeds the {MAX_APPROVAL_TREE_ENTRIES} entry fingerprint limit"
+            ));
+        }
+        self.total_bytes = self
+            .total_bytes
+            .checked_add(entry.size)
+            .ok_or_else(|| "build tree fingerprint size overflowed".to_string())?;
+        if self.total_bytes > MAX_APPROVAL_TREE_BYTES {
+            return Err(format!(
+                "build tree exceeds the {MAX_APPROVAL_TREE_BYTES} byte fingerprint limit"
+            ));
+        }
+        self.entries.push(entry);
+        Ok(())
+    }
+}
+
 /// Load a checked-out AUR build tree without evaluating any shell code.
 ///
 /// This is the common one-shot entry point for both a helper-provided build
@@ -95,15 +139,36 @@ pub fn load_build_tree(build_dir: &Path, expected_pkgbase: &str) -> Result<Local
     load_build_tree_from_manifest(manifest)
 }
 
+/// Load a complete build tree for an explicit user approval. The package base
+/// is taken from the inert `.SRCINFO`; the Paru gate independently checks that
+/// identity against its `PKGBASE` environment before consulting the approval.
+pub fn load_build_tree_for_approval(build_dir: &Path) -> Result<LocalBuildTree, String> {
+    let manifest = load_build_manifest_inner(build_dir)?;
+    load_build_tree_from_manifest(manifest)
+}
+
 /// Read only enough inert state to validate the Paru-supplied package base.
-/// This lets an explicit package-base whitelist bypass scanner/input failures
-/// without trusting a directory name or evaluating the PKGBUILD.
+/// This lets an explicit permanent package-base allowance be considered only
+/// after `.SRCINFO` proves the Paru-supplied identity, without trusting a
+/// directory name or evaluating the PKGBUILD.
 pub fn load_build_manifest(
     build_dir: &Path,
     expected_pkgbase: &str,
 ) -> Result<LocalBuildManifest, String> {
     validate_package_name(expected_pkgbase, "PKGBASE")?;
 
+    let manifest = load_build_manifest_inner(build_dir)?;
+    if manifest.srcinfo.pkgbase != expected_pkgbase {
+        return Err(format!(
+            "PKGBASE mismatch: environment says {expected_pkgbase}, but .SRCINFO says {}",
+            manifest.srcinfo.pkgbase
+        ));
+    }
+
+    Ok(manifest)
+}
+
+fn load_build_manifest_inner(build_dir: &Path) -> Result<LocalBuildManifest, String> {
     let build_dir = fs::canonicalize(build_dir).map_err(|error| {
         format!(
             "cannot resolve build directory {}: {error}",
@@ -119,12 +184,6 @@ pub fn load_build_manifest(
 
     let srcinfo_content = read_tree_file(&build_dir, ".SRCINFO", ".SRCINFO")?;
     let srcinfo = parse_srcinfo(&srcinfo_content)?;
-    if srcinfo.pkgbase != expected_pkgbase {
-        return Err(format!(
-            "PKGBASE mismatch: environment says {expected_pkgbase}, but .SRCINFO says {}",
-            srcinfo.pkgbase
-        ));
-    }
 
     Ok(LocalBuildManifest { build_dir, srcinfo })
 }
@@ -1533,6 +1592,244 @@ fn read_tree_file(build_dir: &Path, relative: &str, kind: &str) -> Result<String
         .map_err(|error| format!("cannot read {kind} {}: {error}", resolved.display()))
 }
 
+/// Fingerprint every filesystem entry in a tree that has already passed the
+/// inert loader. This deliberately covers undeclared and dynamically named
+/// checkout files, the build-root mode, and VCS metadata that build code can
+/// read or execute, as well as the inputs Bewaur can identify statically.
+pub fn fingerprint_build_tree(tree: &LocalBuildTree) -> Result<String, String> {
+    let mut state = FingerprintState::default();
+    let root_metadata = fs::symlink_metadata(&tree.build_dir).map_err(|error| {
+        format!(
+            "cannot inspect build directory {}: {error}",
+            tree.build_dir.display()
+        )
+    })?;
+    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "build directory is not a real directory: {}",
+            tree.build_dir.display()
+        ));
+    }
+    state.push(FingerprintEntry {
+        entry_type: 1,
+        logical_path: Vec::new(),
+        resolved_path: Vec::new(),
+        mode: file_mode_bits(&root_metadata),
+        size: 0,
+        content_digest: [0; 32],
+    })?;
+    collect_fingerprint_entries(&tree.build_dir, &tree.build_dir, &mut state)?;
+    Ok(approval_digest(&tree.pkgbase, &mut state.entries))
+}
+
+fn collect_fingerprint_entries(
+    build_dir: &Path,
+    directory: &Path,
+    state: &mut FingerprintState,
+) -> Result<(), String> {
+    let mut children = fs::read_dir(directory)
+        .map_err(|error| {
+            format!(
+                "cannot read build directory {}: {error}",
+                directory.display()
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("cannot enumerate build directory: {error}"))?;
+    children.sort_by(|left, right| {
+        platform_path_bytes(Path::new(&left.file_name()))
+            .cmp(&platform_path_bytes(Path::new(&right.file_name())))
+    });
+
+    for child in children {
+        if state.entries.len() >= MAX_APPROVAL_TREE_ENTRIES {
+            return Err(format!(
+                "build tree exceeds the {MAX_APPROVAL_TREE_ENTRIES} entry fingerprint limit"
+            ));
+        }
+        let path = child.path();
+        let relative = path.strip_prefix(build_dir).map_err(|_| {
+            format!(
+                "build entry escaped the build directory: {}",
+                path.display()
+            )
+        })?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("cannot inspect build entry {}: {error}", path.display()))?;
+        let file_type = metadata.file_type();
+
+        if file_type.is_symlink() {
+            let target = fs::read_link(&path).map_err(|error| {
+                format!("cannot read build symlink {}: {error}", path.display())
+            })?;
+            let resolved = fs::canonicalize(&path).map_err(|error| {
+                format!("cannot resolve build symlink {}: {error}", path.display())
+            })?;
+            if !resolved.starts_with(build_dir) {
+                return Err(format!(
+                    "refusing to approve build symlink outside build directory: {}",
+                    relative.display()
+                ));
+            }
+            let target_bytes = platform_path_bytes(&target);
+            state.push(FingerprintEntry {
+                entry_type: 3,
+                logical_path: platform_path_bytes(relative),
+                resolved_path: resolved_path_bytes(build_dir, &resolved)?,
+                mode: 0,
+                size: target_bytes.len() as u64,
+                content_digest: Sha256::digest(&target_bytes).into(),
+            })?;
+        } else if file_type.is_dir() {
+            state.push(FingerprintEntry {
+                entry_type: 1,
+                logical_path: platform_path_bytes(relative),
+                resolved_path: platform_path_bytes(relative),
+                mode: file_mode_bits(&metadata),
+                size: 0,
+                content_digest: [0; 32],
+            })?;
+            collect_fingerprint_entries(build_dir, &path, state)?;
+        } else if file_type.is_file() {
+            let remaining_bytes = MAX_APPROVAL_TREE_BYTES.saturating_sub(state.total_bytes);
+            state.push(fingerprint_regular_file(
+                build_dir,
+                relative,
+                &path,
+                &metadata,
+                remaining_bytes,
+            )?)?;
+        } else {
+            return Err(format!(
+                "refusing to approve special filesystem entry: {}",
+                relative.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn fingerprint_regular_file(
+    build_dir: &Path,
+    relative: &Path,
+    path: &Path,
+    metadata: &fs::Metadata,
+    remaining_bytes: u64,
+) -> Result<FingerprintEntry, String> {
+    if metadata.len() > remaining_bytes {
+        return Err(format!(
+            "build tree exceeds the {MAX_APPROVAL_TREE_BYTES} byte fingerprint limit"
+        ));
+    }
+    let resolved = fs::canonicalize(path)
+        .map_err(|error| format!("cannot resolve build file {}: {error}", path.display()))?;
+    if !resolved.starts_with(build_dir) {
+        return Err(format!(
+            "refusing to approve build file outside build directory: {}",
+            relative.display()
+        ));
+    }
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("cannot read build file {}: {error}", path.display()))?;
+    let mut content_hasher = Sha256::new();
+    let mut size = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("cannot read build file {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        size = size
+            .checked_add(read as u64)
+            .ok_or_else(|| format!("build file is too large: {}", path.display()))?;
+        if size > remaining_bytes {
+            return Err(format!(
+                "build tree exceeds the {MAX_APPROVAL_TREE_BYTES} byte fingerprint limit"
+            ));
+        }
+        content_hasher.update(&buffer[..read]);
+    }
+
+    Ok(FingerprintEntry {
+        entry_type: 2,
+        logical_path: platform_path_bytes(relative),
+        resolved_path: resolved_path_bytes(build_dir, &resolved)?,
+        mode: file_mode_bits(metadata),
+        size,
+        content_digest: content_hasher.finalize().into(),
+    })
+}
+
+fn resolved_path_bytes(build_dir: &Path, resolved: &Path) -> Result<Vec<u8>, String> {
+    let relative = resolved.strip_prefix(build_dir).map_err(|_| {
+        format!(
+            "resolved build input escaped the build directory: {}",
+            resolved.display()
+        )
+    })?;
+    Ok(platform_path_bytes(relative))
+}
+
+#[cfg(unix)]
+fn platform_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn platform_path_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
+}
+
+#[cfg(unix)]
+fn file_mode_bits(metadata: &fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+
+    metadata.permissions().mode() & 0o7777
+}
+
+#[cfg(not(unix))]
+fn file_mode_bits(_metadata: &fs::Metadata) -> u32 {
+    0
+}
+
+fn approval_digest(pkgbase: &str, entries: &mut [FingerprintEntry]) -> String {
+    entries.sort_by(|left, right| {
+        left.logical_path
+            .cmp(&right.logical_path)
+            .then_with(|| left.entry_type.cmp(&right.entry_type))
+    });
+
+    let mut hasher = Sha256::new();
+    hash_fingerprint_field(&mut hasher, APPROVAL_DIGEST_DOMAIN);
+    hash_fingerprint_field(&mut hasher, pkgbase.as_bytes());
+    hasher.update((entries.len() as u64).to_le_bytes());
+    for entry in entries {
+        hasher.update([entry.entry_type]);
+        hash_fingerprint_field(&mut hasher, &entry.logical_path);
+        hash_fingerprint_field(&mut hasher, &entry.resolved_path);
+        hasher.update(entry.mode.to_le_bytes());
+        hasher.update(entry.size.to_le_bytes());
+        hasher.update(entry.content_digest);
+    }
+
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(APPROVAL_DIGEST_PREFIX.len() + digest.len() * 2);
+    output.push_str(APPROVAL_DIGEST_PREFIX);
+    for byte in digest {
+        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    output
+}
+
+fn hash_fingerprint_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
 fn resolve_tree_file(build_dir: &Path, relative: &str, kind: &str) -> Result<PathBuf, String> {
     validate_relative_path(relative, kind)?;
     let requested = build_dir.join(relative);
@@ -1624,6 +1921,96 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn write_minimal_tree(dir: &TestDir) {
+        dir.write(
+            "PKGBUILD",
+            "pkgname=demo\npkgver=1\npkgrel=1\npackage() { :; }\n",
+        );
+        dir.write(".SRCINFO", "pkgbase = demo\n\npkgname = demo\n");
+    }
+
+    #[test]
+    fn approval_fingerprint_covers_every_undeclared_checkout_file() {
+        let dir = TestDir::new("fingerprint-undeclared");
+        write_minimal_tree(&dir);
+        dir.write_bytes("computed-payload", b"first\xffpayload");
+        let tree = load_build_tree(&dir.0, "demo").unwrap();
+        let first = fingerprint_build_tree(&tree).unwrap();
+
+        dir.write_bytes("computed-payload", b"second\xffpayload");
+        let second = fingerprint_build_tree(&tree).unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("sha256:v1:p1:"), "{first}");
+    }
+
+    #[test]
+    fn approval_fingerprint_is_independent_of_absolute_path_and_creation_order() {
+        let left = TestDir::new("fingerprint-left");
+        let right = TestDir::new("fingerprint-right");
+        write_minimal_tree(&left);
+        left.write("empty-dir/one", "1");
+        left.write("two", "2");
+        write_minimal_tree(&right);
+        right.write("two", "2");
+        right.write("empty-dir/one", "1");
+
+        let left_tree = load_build_tree(&left.0, "demo").unwrap();
+        let right_tree = load_build_tree(&right.0, "demo").unwrap();
+        assert_eq!(
+            fingerprint_build_tree(&left_tree).unwrap(),
+            fingerprint_build_tree(&right_tree).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approval_fingerprint_covers_modes_and_rejects_any_escaping_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = TestDir::new("fingerprint-mode-symlink");
+        write_minimal_tree(&dir);
+        dir.write("undeclared-helper", "echo helper\n");
+        let tree = load_build_tree(&dir.0, "demo").unwrap();
+        let first = fingerprint_build_tree(&tree).unwrap();
+
+        fs::set_permissions(
+            dir.0.join("undeclared-helper"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let second = fingerprint_build_tree(&tree).unwrap();
+        assert_ne!(first, second);
+
+        let outside = TestDir::new("fingerprint-outside");
+        outside.write("target", "outside");
+        symlink(outside.0.join("target"), dir.0.join("escape")).unwrap();
+        let error = fingerprint_build_tree(&tree).unwrap_err();
+        assert!(error.contains("symlink outside build directory"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approval_fingerprint_covers_build_root_mode_and_git_state() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TestDir::new("fingerprint-root-git");
+        write_minimal_tree(&dir);
+        dir.write(".git/refs/heads/payload", "first\n");
+        let tree = load_build_tree(&dir.0, "demo").unwrap();
+        let first = fingerprint_build_tree(&tree).unwrap();
+
+        let original_mode = fs::metadata(&dir.0).unwrap().permissions().mode() & 0o7777;
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(original_mode ^ 0o040)).unwrap();
+        let changed_mode = fingerprint_build_tree(&tree).unwrap();
+        assert_ne!(first, changed_mode);
+
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(original_mode)).unwrap();
+        dir.write(".git/refs/heads/payload", "second\n");
+        let changed_git_state = fingerprint_build_tree(&tree).unwrap();
+        assert_ne!(first, changed_git_state);
     }
 
     #[test]

@@ -54,15 +54,47 @@ enum Commands {
         #[arg(long, value_name = "DIR")]
         build_dir: std::path::PathBuf,
     },
+    /// Approve the exact inert inputs in one fully loaded AUR build tree
+    Approve {
+        /// Build directory containing PKGBUILD, .SRCINFO, and local inputs
+        #[arg(long, value_name = "DIR")]
+        build_dir: std::path::PathBuf,
+
+        /// Persist only if the current digest matches a previously reviewed one
+        #[arg(long, value_name = "DIGEST")]
+        reviewed: Option<String>,
+    },
     /// Inspect or prune cached AUR Git repositories
     Cache {
         #[command(subcommand)]
         command: CacheCommands,
     },
-    /// Whitelist a package (skip future scans)
+    /// Permanently allow a package base by name, across all future tree changes
     Allow {
-        /// Package name to whitelist
+        /// Package base to allow permanently
         package: String,
+
+        /// Confirm this dangerous name-wide bypass instead of exact-tree approval
+        #[arg(long)]
+        forever: bool,
+    },
+    /// List exact-tree approvals and permanent package-base allowances
+    Approvals {
+        /// Show authorization state for only one package base
+        package: Option<String>,
+    },
+    /// Remove an exact-tree approval, or an explicitly selected permanent one
+    Revoke {
+        /// Package base whose authorization should be removed
+        package: String,
+
+        /// Remove the permanent name-wide allowance instead of the exact tree
+        #[arg(long, conflicts_with = "all")]
+        forever: bool,
+
+        /// Remove both exact-tree and permanent authorization
+        #[arg(long)]
+        all: bool,
     },
     /// Benchmark scanning the N most recently modified AUR packages
     Bench {
@@ -142,8 +174,18 @@ fn main() {
             flagged_only,
         ),
         Commands::Gate { build_dir } => cmd_gate(&build_dir),
+        Commands::Approve {
+            build_dir,
+            reviewed,
+        } => cmd_approve(&build_dir, reviewed.as_deref()),
         Commands::Cache { command } => cmd_cache(command),
-        Commands::Allow { package } => cmd_allow(&package),
+        Commands::Allow { package, forever } => cmd_allow(&package, forever),
+        Commands::Approvals { package } => cmd_approvals(package.as_deref()),
+        Commands::Revoke {
+            package,
+            forever,
+            all,
+        } => cmd_revoke(&package, forever, all),
         Commands::Bench { count, jobs } => bench::run(count, jobs),
         Commands::Signals { json } => cmd_signals(json),
         Commands::Ignore {
@@ -191,7 +233,7 @@ fn cmd_cache(command: CacheCommands) -> i32 {
 }
 
 fn cmd_gate(build_dir: &std::path::Path) -> i32 {
-    use shared::config::is_whitelisted_in;
+    use shared::config::{approved_tree_digest, is_permanently_allowed_in};
     use shared::scoring::Tier;
 
     let expected_pkgbase = match std::env::var("PKGBASE") {
@@ -226,15 +268,15 @@ fn cmd_gate(build_dir: &std::path::Path) -> i32 {
         }
     };
 
-    if is_whitelisted_in(&config, manifest.pkgbase()) {
+    if is_permanently_allowed_in(&config, manifest.pkgbase()) {
         eprintln!(
-            "bewaur gate: package base {} is whitelisted; allowing build",
+            "bewaur gate: package base {} has a permanent name-wide allowance; allowing build",
             manifest.pkgbase()
         );
         return 0;
     }
 
-    let tree = match shared::local_build::load_build_tree_from_manifest(manifest) {
+    let initial_tree = match shared::local_build::load_build_tree_from_manifest(manifest) {
         Ok(tree) => tree,
         Err(error) => {
             eprintln!("bewaur gate: {error}");
@@ -242,24 +284,71 @@ fn cmd_gate(build_dir: &std::path::Path) -> i32 {
         }
     };
 
-    let result = coordinator::scan_local_build_with_config(
-        &tree.pkgbase,
-        &tree.pkgbuild_content,
-        tree.install_script_content.as_deref(),
-        tree.local_source_content.as_deref(),
-        &config,
-    );
+    // Bracket a freshly loaded scanner snapshot with full-tree fingerprints.
+    // A normal concurrent edit therefore blocks instead of pairing one tree's
+    // report with another tree's approval.
+    let (tree, result, current_digest) = match inspect_stable_tree(
+        initial_tree,
+        || shared::local_build::load_build_tree(build_dir, &expected_pkgbase),
+        |tree| {
+            coordinator::scan_local_build_with_config(
+                &tree.pkgbase,
+                &tree.pkgbuild_content,
+                tree.install_script_content.as_deref(),
+                tree.local_source_content.as_deref(),
+                &config,
+            )
+        },
+    ) {
+        Ok(stable) => stable,
+        Err(error) => {
+            eprintln!("bewaur gate: {error}");
+            return 1;
+        }
+    };
     shared::output::print_text(&result, true);
 
-    if result.tier >= Tier::Sketchy {
+    let stored_tree_digest = approved_tree_digest(&config, &tree.pkgbase);
+    let exact_tree_approved = stored_tree_digest == Some(current_digest.as_str());
+    if stored_tree_digest.is_some() && !exact_tree_approved {
         eprintln!(
-            "bewaur gate: {} package blocked before build; review the findings or run 'bewaur allow {}' to bypass",
-            result.tier, tree.pkgbase
+            "bewaur gate: build inputs for {} changed since approval; applying the current scan policy",
+            tree.pkgbase
+        );
+    }
+
+    if result.tier >= Tier::Sketchy && exact_tree_approved {
+        eprintln!(
+            "bewaur gate: exact build tree for {} is approved; allowing the reviewed inputs",
+            tree.pkgbase
+        );
+        0
+    } else if result.tier >= Tier::Sketchy {
+        eprintln!(
+            "bewaur gate: {} package blocked before build; review the exact tree and run 'bewaur approve --build-dir .' to approve only these inputs",
+            result.tier
         );
         1
     } else {
         0
     }
+}
+
+fn inspect_stable_tree<T>(
+    initial_tree: shared::local_build::LocalBuildTree,
+    reload: impl FnOnce() -> Result<shared::local_build::LocalBuildTree, String>,
+    inspect: impl FnOnce(&shared::local_build::LocalBuildTree) -> T,
+) -> Result<(shared::local_build::LocalBuildTree, T, String), String> {
+    let initial_digest = shared::local_build::fingerprint_build_tree(&initial_tree)
+        .map_err(|error| format!("cannot fingerprint build tree: {error}"))?;
+    let tree = reload()?;
+    let result = inspect(&tree);
+    let current_digest = shared::local_build::fingerprint_build_tree(&tree)
+        .map_err(|error| format!("cannot fingerprint build tree: {error}"))?;
+    if initial_digest != current_digest {
+        return Err("build tree changed while it was being scanned or reviewed".to_string());
+    }
+    Ok((tree, result, current_digest))
 }
 
 fn cmd_scan(
@@ -530,15 +619,169 @@ fn get_installed_aur_packages() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn cmd_allow(package: &str) -> i32 {
-    match shared::config::add_to_whitelist(package) {
+fn cmd_approve(build_dir: &std::path::Path, reviewed_digest: Option<&str>) -> i32 {
+    let config = match shared::config::load_config_strict() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("bewaur approve: {error}");
+            return 1;
+        }
+    };
+
+    let initial_tree = match shared::local_build::load_build_tree_for_approval(build_dir) {
+        Ok(tree) => tree,
+        Err(error) => {
+            eprintln!("bewaur approve: {error}");
+            return 1;
+        }
+    };
+
+    let (tree, result, approval_digest) = match inspect_stable_tree(
+        initial_tree,
+        || shared::local_build::load_build_tree_for_approval(build_dir),
+        |tree| {
+            coordinator::scan_local_build_with_config(
+                &tree.pkgbase,
+                &tree.pkgbuild_content,
+                tree.install_script_content.as_deref(),
+                tree.local_source_content.as_deref(),
+                &config,
+            )
+        },
+    ) {
+        Ok(stable) => stable,
+        Err(error) => {
+            eprintln!("bewaur approve: {error}");
+            return 1;
+        }
+    };
+    shared::output::print_text(&result, true);
+    eprintln!("bewaur approve: reviewed local source-tree digest {approval_digest}");
+    let Some(reviewed_digest) = reviewed_digest else {
+        eprintln!(
+            "bewaur approve: approval was not saved; review the report, then rerun with '--reviewed {approval_digest}'"
+        );
+        return 1;
+    };
+    if reviewed_digest != approval_digest {
+        eprintln!(
+            "bewaur approve: reviewed digest does not match the current build tree; no approval was saved"
+        );
+        eprintln!("  Reviewed: {reviewed_digest}");
+        eprintln!("  Current:  {approval_digest}");
+        return 1;
+    }
+
+    match shared::config::approve_tree(&tree.pkgbase, &approval_digest) {
         Ok(()) => {
-            eprintln!("Whitelisted: {package}");
+            eprintln!("Approved exact build tree: {}", tree.pkgbase);
+            eprintln!("  Digest: {approval_digest}");
+            eprintln!("  Saved to {}", shared::config::config_path().display());
+            0
+        }
+        Err(error) => {
+            eprintln!("bewaur approve: {error}");
+            1
+        }
+    }
+}
+
+fn cmd_allow(package: &str, forever: bool) -> i32 {
+    if !forever {
+        eprintln!(
+            "bewaur allow: refusing a name-wide bypass without --forever; use 'bewaur approve --build-dir .' for an exact-tree approval"
+        );
+        return 1;
+    }
+
+    match shared::config::add_to_permanent_allow(package) {
+        Ok(()) => {
+            eprintln!("Permanently allowed by package base: {package}");
             eprintln!("  Saved to {}", shared::config::config_path().display());
             0
         }
         Err(e) => {
             eprintln!("Error: {e}");
+            1
+        }
+    }
+}
+
+fn cmd_approvals(package: Option<&str>) -> i32 {
+    let config = match shared::config::load_config_strict() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("bewaur approvals: {error}");
+            return 1;
+        }
+    };
+    if let Some(package) = package
+        && let Err(error) = shared::aur_git::validate_package_name(package)
+    {
+        eprintln!("bewaur approvals: {error}");
+        return 1;
+    }
+
+    let exact: Vec<_> = config
+        .approvals
+        .trees
+        .iter()
+        .filter(|approval| package.is_none_or(|name| name == approval.package_base))
+        .collect();
+    let permanent: Vec<_> = config
+        .permanent_allow
+        .packages
+        .iter()
+        .filter(|candidate| package.is_none_or(|name| name == candidate.as_str()))
+        .collect();
+
+    if exact.is_empty() && permanent.is_empty() {
+        println!("No matching approvals.");
+        return 0;
+    }
+    for approval in exact {
+        println!("exact     {}  {}", approval.package_base, approval.digest);
+    }
+    for package in permanent {
+        println!("permanent {package}");
+    }
+    0
+}
+
+fn cmd_revoke(package: &str, forever: bool, all: bool) -> i32 {
+    let result = if all {
+        shared::config::revoke_all_approvals(package).map(|(tree, permanent)| {
+            format!(
+                "Revoked for {package}: exact-tree={}, permanent={}",
+                if tree { "yes" } else { "not present" },
+                if permanent { "yes" } else { "not present" }
+            )
+        })
+    } else if forever {
+        shared::config::revoke_permanent_allow(package).map(|removed| {
+            if removed {
+                format!("Revoked permanent allowance: {package}")
+            } else {
+                format!("No permanent allowance existed for: {package}")
+            }
+        })
+    } else {
+        shared::config::revoke_tree_approval(package).map(|removed| {
+            if removed {
+                format!("Revoked exact-tree approval: {package}")
+            } else {
+                format!("No exact-tree approval existed for: {package}")
+            }
+        })
+    };
+
+    match result {
+        Ok(message) => {
+            eprintln!("{message}");
+            0
+        }
+        Err(error) => {
+            eprintln!("bewaur revoke: {error}");
             1
         }
     }
@@ -703,7 +946,9 @@ fn cmd_unignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::bulk_scan_exit_code;
+    use super::{bulk_scan_exit_code, inspect_stable_tree, shared::local_build};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn bulk_scan_fails_closed_when_any_package_cannot_be_scanned() {
@@ -719,5 +964,42 @@ mod tests {
     #[test]
     fn bulk_scan_succeeds_when_every_scan_is_below_suspicious() {
         assert_eq!(bulk_scan_exit_code(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn stable_tree_inspection_rejects_a_mutation_during_the_scan() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("bewaur-stable-tree-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("PKGBUILD"),
+            "pkgname=demo\npkgver=1\npkgrel=1\npackage() { :; }\n",
+        )
+        .unwrap();
+        fs::write(root.join(".SRCINFO"), "pkgbase = demo\n\npkgname = demo\n").unwrap();
+
+        let initial = local_build::load_build_tree(&root, "demo").unwrap();
+        let result = inspect_stable_tree(
+            initial,
+            || local_build::load_build_tree(&root, "demo"),
+            |_| {
+                fs::write(
+                    root.join("PKGBUILD"),
+                    "pkgname=demo\npkgver=2\npkgrel=1\npackage() { :; }\n",
+                )
+                .unwrap();
+            },
+        );
+
+        assert!(
+            result
+                .unwrap_err()
+                .contains("changed while it was being scanned or reviewed")
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

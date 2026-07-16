@@ -16,7 +16,9 @@
   gate, including strict exit policy, stderr-only reports, inert build-tree
   loading, stale `.SRCINFO` install/source coverage, literal sourced helpers,
   invalid-UTF-8 executable bytes, install command-vs-data positions, inert local
-  patch/doc handling, package-base total-bypass policy, and operational failures.
+  patch/doc handling, complete-tree digest invalidation, reviewed-tree approval
+  reporting, exact/permanent revocation, explicit total-bypass policy, and
+  operational failures.
 - **Incident detection tests** (`tests/incident_detection_tests.rs`): Cover the
   June 2026 package-manager campaign, named `.install` fetches, and SUID/SGID
   regressions through the real feature analyzers and scorer.

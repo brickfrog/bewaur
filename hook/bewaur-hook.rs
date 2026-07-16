@@ -9,7 +9,7 @@
 
 use bewaur::coordinator;
 use bewaur::shared::bulk;
-use bewaur::shared::config::{self, is_whitelisted_in};
+use bewaur::shared::config::{self, is_permanently_allowed_in};
 use bewaur::shared::output;
 use bewaur::shared::scoring::{ScanResult, Tier};
 use colored::Colorize;
@@ -116,7 +116,21 @@ fn main() {
     let interactive = hook_io.is_interactive();
     colored::control::set_override(interactive);
 
-    let config = config::load_config();
+    let config = match config::load_config_strict() {
+        Ok(config) => config,
+        Err(error) => {
+            let _ = writeln!(
+                hook_io,
+                "{}",
+                format!(
+                    "bewaur: invalid or unreadable security config — blocking transaction: {error}"
+                )
+                .red()
+                .bold()
+            );
+            std::process::exit(1);
+        }
+    };
 
     let _ = writeln!(
         hook_io,
@@ -133,22 +147,8 @@ fn main() {
 
     // --- Phase 1: Collect results silently ---
 
-    // Filter whitelisted packages first
-    let mut whitelisted_count: u32 = 0;
-    let to_scan: Vec<String> = aur_packages
-        .into_iter()
-        .filter(|pkg| {
-            if is_whitelisted_in(&config, pkg) {
-                whitelisted_count += 1;
-                false
-            } else {
-                true
-            }
-        })
-        .collect();
-
     // Batch-fetch AUR metadata to separate real AUR packages from local-only ones
-    let metadata = match bulk::batch_fetch_metadata(&to_scan) {
+    let metadata = match bulk::batch_fetch_metadata(&aur_packages) {
         Ok(metadata) => metadata,
         Err(e) => {
             let _ = writeln!(hook_io, "{}", format!("  error: {e}").red());
@@ -162,7 +162,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let not_found: Vec<&str> = to_scan
+    let not_found: Vec<&str> = aur_packages
         .iter()
         .filter(|n| !metadata.contains_key(n.as_str()))
         .map(|n| n.as_str())
@@ -175,9 +175,23 @@ fn main() {
             not_found.join(", ")
         );
     }
-    let scan_packages: Vec<String> = to_scan
+    // Exact-tree approvals apply only to the Paru pre-build gate. Resolve each
+    // transaction package to its AUR package base before applying the explicit
+    // permanent allowance, so split-package outputs behave consistently.
+    let mut permanently_allowed_count: u32 = 0;
+    let scan_packages: Vec<String> = aur_packages
         .into_iter()
-        .filter(|n| metadata.contains_key(n.as_str()))
+        .filter(|name| {
+            let Some(package) = metadata.get(name.as_str()) else {
+                return false;
+            };
+            if transaction_has_permanent_allowance(&config, package.package_base.as_deref()) {
+                permanently_allowed_count += 1;
+                false
+            } else {
+                true
+            }
+        })
         .collect();
 
     let any_scanned = !scan_packages.is_empty();
@@ -234,13 +248,13 @@ fn main() {
 
     // --- Phase 2: Output + decision ---
 
-    // Case 1: All whitelisted
+    // Case 1: All permanently allowed
     if !any_scanned {
-        if whitelisted_count > 0 {
+        if permanently_allowed_count > 0 {
             let _ = writeln!(
                 hook_io,
-                "  {} package(s) whitelisted, nothing to scan.",
-                whitelisted_count
+                "  {} package(s) permanently allowed, nothing to scan.",
+                permanently_allowed_count
             );
         }
         return;
@@ -294,7 +308,7 @@ fn main() {
     }
 
     match gate_decision(&tier_counts, !scan_errors.is_empty(), interactive) {
-        // Case 2: MALICIOUS detected -> hard block, must whitelist
+        // Case 2: MALICIOUS detected -> hard block, needs explicit authorization
         GateDecision::BlockMalicious => {
             let _ = writeln!(hook_io);
             let _ = writeln!(
@@ -306,7 +320,7 @@ fn main() {
             );
             let _ = writeln!(
                 hook_io,
-                "bewaur: use 'bewaur allow <package>' to whitelist, then retry"
+                "bewaur: return to the reviewed Paru build directory and run 'bewaur approve --build-dir .'; use 'bewaur allow <package-base> --forever' only for a name-wide bypass"
             );
             std::process::exit(1);
         }
@@ -322,7 +336,7 @@ fn main() {
             );
             let _ = writeln!(
                 hook_io,
-                "bewaur: use 'bewaur allow <package>' to whitelist failed packages, then retry"
+                "bewaur: fix the scan error, or use 'bewaur allow <package-base> --forever' for an explicit name-wide bypass"
             );
             std::process::exit(1);
         }
@@ -368,6 +382,13 @@ fn main() {
             let _ = writeln!(hook_io, "\n  {}", "All packages look clean.".green());
         }
     }
+}
+
+fn transaction_has_permanent_allowance(
+    config: &config::Config,
+    package_base: Option<&str>,
+) -> bool {
+    package_base.is_some_and(|package_base| is_permanently_allowed_in(config, package_base))
 }
 
 /// Get all package names from official sync databases in one call.
@@ -429,5 +450,18 @@ mod tests {
                 GateDecision::BlockMalicious
             );
         }
+    }
+
+    #[test]
+    fn permanent_allowance_uses_the_aur_package_base_for_split_outputs() {
+        let mut config = config::Config::default();
+        config.permanent_allow.packages.push("demo".to_string());
+
+        assert!(transaction_has_permanent_allowance(&config, Some("demo")));
+        assert!(!transaction_has_permanent_allowance(
+            &config,
+            Some("other-base")
+        ));
+        assert!(!transaction_has_permanent_allowance(&config, None));
     }
 }

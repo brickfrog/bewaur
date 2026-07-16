@@ -29,6 +29,16 @@
   with wrapper, heredoc, and redirection-aware parsing instead of raw-text guesses.
 
 ### Added
+- **Exact local-tree approvals**: add versioned, policy-revisioned approval
+  fingerprints over every entry in a fully loaded build tree, including VCS
+  metadata and the build-root mode. Approved
+  trees are still scanned and reported, but may override the final pre-build
+  tier block until any path, content byte, mode, directory, or symlink changes.
+- **Explicit authorization management**: add `approve`, `approvals`, and
+  `revoke`; reserve `allow <pkgbase> --forever` for a conspicuous permanent
+  name-wide bypass. Config updates are strictly validated, serialized under an
+  exclusive lock, written atomically with private permissions, and legacy
+  `[whitelist]` sections fail closed.
 - **Paru pre-build gate**: `bewaur gate --build-dir .` inertly scans the exact,
   path-confined build tree before `makepkg`, blocks `SKETCHY` and above, and fails
   closed on operational or statically recognizable metadata-mutation errors.

@@ -49,7 +49,11 @@ cargo build --release --frozen
 bewaur scan                # scan all installed AUR packages
 bewaur scan <package>      # scan a package
 bewaur gate --build-dir .  # fail-closed scan before an AUR helper builds
-bewaur allow <package>     # whitelist a package
+bewaur approve --build-dir .       # display the exact-tree scan/digest; do not save
+bewaur approve --build-dir . --reviewed <digest> # save only the reviewed inputs
+bewaur approvals [<base>]          # list exact and permanent authorization
+bewaur revoke <base>               # remove the exact-tree approval
+bewaur allow <base> --forever      # explicit name-wide emergency bypass
 bewaur signals             # list scoring signals
 bewaur cache stats         # inspect cached AUR Git repositories
 bewaur cache clean <base>  # remove one package-base repository
@@ -113,16 +117,40 @@ them. Package identities and all referenced local paths are validated, symlinks
 are resolved, and every file read must remain inside the canonical build
 directory.
 
-The command writes its human-readable report to stderr, returns success only
-for `TRUSTED` or `OK`, and blocks on `SKETCHY`, `SUSPICIOUS`, `MALICIOUS`, or
-any read/parse/config error. `bewaur allow <package>` bypasses the gate only when
-the whitelist matches the package base. After `.SRCINFO` validates that package
-base, this is a total bypass: Bewaur skips the PKGBUILD, install-script and helper
-reads, and all trust findings. Use it only after manually reviewing that exact
-build tree. Whitelisting one split-package output does not exempt its siblings;
-use `bewaur allow <pkgbase>` only when you intentionally want the whole build
-tree bypassed. The ALPM hook remains installed as a second, pre-transaction
-check. In an interactive pacman transaction, that hook prompts for
+The command writes its human-readable report to stderr and normally returns
+success only for `TRUSTED` or `OK`. It blocks `SKETCHY`, `SUSPICIOUS`,
+`MALICIOUS`, and every read, parse, fingerprint, or config error.
+
+For a finding you have manually reviewed, run `bewaur approve --build-dir .`
+from that Paru build directory. Bewaur reloads and scans the current tree,
+prints its versioned digest, and intentionally saves nothing. Rerun with the
+displayed `--reviewed <digest>` only after reviewing that report; Bewaur refuses
+if the tree no longer matches it. The stored approval is scoped to the
+validated package base and the complete local source tree: every file,
+directory, raw filename/content byte, relevant Unix mode, and symlink target is
+fingerprinted recursively, including otherwise undeclared files and `.git`
+state that build code could read or execute. Only the absolute checkout
+location, ownership, and timestamps are excluded.
+
+An approved tree is still scanned and its current findings are still printed;
+the matching approval overrides only the final risk-tier block. Any local tree
+change invalidates it. A source fetched later is naturally outside this local
+snapshot, so strong makepkg checksums remain the content pin; `SKIP` and mutable
+VCS sources are not transformed into immutable artifacts by an approval.
+Use `bewaur approvals`, `bewaur revoke <pkgbase>`, and
+`bewaur revoke <pkgbase> --all` to inspect or remove authorization.
+
+`bewaur allow <pkgbase> --forever` is deliberately different: after `.SRCINFO`
+validates the package base, it is a permanent name-wide total bypass across
+future tree changes and loader failures. The bare `allow` command is refused.
+Use `--forever` only as an explicit recovery path, not ordinary review.
+`bewaur revoke <pkgbase> --forever` removes it. Legacy `[whitelist]` config
+fails closed and must be consciously removed or re-entered with `--forever`.
+
+The ALPM hook remains installed as a second, pre-transaction check. It has no
+local helper tree with which to verify an exact approval, so only an explicit
+permanent package-base allowance applies there. In an interactive pacman
+transaction, that hook prompts for
 `SKETCHY`/`SUSPICIOUS` results. Without a controlling terminal it still scans:
 clean results pass, while flagged results and scan errors block instead of
 silently skipping the check.

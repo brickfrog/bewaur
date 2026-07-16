@@ -63,7 +63,7 @@ fn renamed_hook_binary_starts_with_empty_input() {
 }
 
 #[test]
-fn cli_writes_only_the_renamed_config_directory() {
+fn explicit_permanent_allow_writes_only_the_renamed_config_directory() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -71,7 +71,7 @@ fn cli_writes_only_the_renamed_config_directory() {
     let root = std::env::temp_dir().join(format!("bewaur-identity-{}-{nonce}", std::process::id()));
 
     let output = Command::new(env!("CARGO_BIN_EXE_bewaur"))
-        .args(["allow", "identity-test-package"])
+        .args(["allow", "identity-test-package", "--forever"])
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_CACHE_HOME", root.join("cache"))
@@ -81,8 +81,45 @@ fn cli_writes_only_the_renamed_config_directory() {
         .expect("failed to run bewaur allow");
 
     assert!(output.status.success());
-    assert!(root.join("config/bewaur/config.toml").is_file());
+    let config_path = root.join("config/bewaur/config.toml");
+    assert!(config_path.is_file());
+    let config = fs::read_to_string(config_path).unwrap();
+    assert!(config.contains("[permanent_allow]"), "{config}");
+    assert!(!config.contains("[whitelist]"), "{config}");
     assert!(!root.join("config/traur").exists());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn allow_refuses_a_name_wide_bypass_without_forever() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bewaur-allow-refusal-{}-{nonce}",
+        std::process::id()
+    ));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bewaur"))
+        .args(["allow", "identity-test-package"])
+        .env("HOME", root.join("home"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env_remove("SUDO_USER")
+        .env_remove("DOAS_USER")
+        .output()
+        .expect("failed to run bewaur allow");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("refusing a name-wide bypass without --forever")
+    );
+    assert!(!root.join("config/bewaur/config.toml").exists());
+
+    if root.exists() {
+        fs::remove_dir_all(root).unwrap();
+    }
 }
