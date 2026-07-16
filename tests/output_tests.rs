@@ -3,8 +3,8 @@
 //! Verifies the exact text output produced by `write_text` for every tier,
 //! ensuring signal details are always shown regardless of tier.
 
-use traur::shared::output;
-use traur::shared::scoring::{ScanResult, Signal, SignalCategory, Tier};
+use bewaur::shared::output;
+use bewaur::shared::scoring::{ScanResult, Signal, SignalCategory, Tier};
 
 fn make_signal(id: &str, category: SignalCategory, points: u32, description: &str, override_gate: bool) -> Signal {
     Signal {
@@ -48,7 +48,7 @@ fn trusted_no_signals() {
     };
     let out = render(&result, false);
     assert_eq!(out, "\
-traur: yay (trust: 100/100)
+bewaur: yay (trust: 100/100)
   Trust: TRUSTED
   No negative signals found.
 ");
@@ -68,7 +68,7 @@ fn trusted_with_signals() {
     };
     let out = render(&result, false);
     assert_eq!(out, "\
-traur: eww (trust: 92/100)
+bewaur: eww (trust: 92/100)
   Trust: TRUSTED
   Negative signals:
        M-NEW-PACKAGE: Package is less than 6 months old
@@ -92,7 +92,7 @@ fn ok_with_signals() {
     };
     let out = render(&result, false);
     assert_eq!(out, "\
-traur: some-tool (trust: 70/100)
+bewaur: some-tool (trust: 70/100)
   Trust: OK
   Negative signals:
        M-NEW-PACKAGE: Package is less than 6 months old
@@ -116,7 +116,7 @@ fn sketchy_with_signals() {
     };
     let out = render(&result, false);
     assert_eq!(out, "\
-traur: sketchy-pkg (trust: 50/100)
+bewaur: sketchy-pkg (trust: 50/100)
   Trust: SKETCHY
   Negative signals:
     !! P-EVAL-BASE64: Base64-encoded eval block
@@ -141,7 +141,7 @@ fn suspicious_with_signals() {
     };
     let out = render(&result, false);
     assert_eq!(out, "\
-traur: shady-bin (trust: 30/100)
+bewaur: shady-bin (trust: 30/100)
   Trust: SUSPICIOUS
   Negative signals:
      ! P-SYSTEMD-CREATE: Creates systemd service
@@ -166,7 +166,7 @@ fn malicious_with_override_gate() {
     };
     let out = render(&result, false);
     assert_eq!(out, "\
-traur: evil-tool (trust: 5/100)
+bewaur: evil-tool (trust: 5/100)
   Trust: MALICIOUS
   !! Override gate fired: P-CURL-PIPE
   Negative signals:
@@ -188,7 +188,7 @@ fn malicious_no_signals_only_gate() {
     };
     let out = render(&result, false);
     assert_eq!(out, "\
-traur: backdoor (trust: 10/100)
+bewaur: backdoor (trust: 10/100)
   Trust: MALICIOUS
   !! Override gate fired: P-REVSHELL-DEVTCP
   Negative signals:
@@ -215,7 +215,7 @@ fn verbose_shows_matched_lines() {
     };
     let out = render(&result, true);
     assert_eq!(out, "\
-traur: test-pkg (trust: 45/100)
+bewaur: test-pkg (trust: 45/100)
   Trust: SKETCHY
   !! Override gate fired: P-CURL-PIPE
   Negative signals:
@@ -275,11 +275,11 @@ fn signal_prefix_levels() {
 #[test]
 fn full_pipeline_trusted_shows_signals() {
     let pkgbuild = include_str!("fixtures/benign/yay.PKGBUILD");
-    let result = traur::coordinator::scan_pkgbuild("yay", pkgbuild);
+    let result = bewaur::coordinator::scan_pkgbuild("yay", pkgbuild);
     let out = render(&result, false);
 
     // Must show package header
-    assert!(out.contains("traur: yay (trust:"), "should show package header");
+    assert!(out.contains("bewaur: yay (trust:"), "should show package header");
     assert!(out.contains("Trust: TRUSTED"), "should show TRUSTED tier");
 
     // If there are signals, they must be listed (not just a count)
@@ -297,7 +297,7 @@ fn full_pipeline_trusted_shows_signals() {
 #[test]
 fn full_pipeline_malicious_shows_all_signals() {
     let pkgbuild = include_str!("fixtures/malicious/curl_pipe_bash.PKGBUILD");
-    let result = traur::coordinator::scan_pkgbuild("firefox-fix-bin", pkgbuild);
+    let result = bewaur::coordinator::scan_pkgbuild("firefox-fix-bin", pkgbuild);
     let out = render(&result, false);
 
     assert!(out.contains("Trust: MALICIOUS"), "should show MALICIOUS tier");

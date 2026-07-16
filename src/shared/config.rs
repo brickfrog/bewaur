@@ -49,7 +49,7 @@ pub struct IgnoredConfig {
     pub categories: Vec<String>,
 }
 
-/// Load config from ~/.config/traur/config.toml, falling back to defaults.
+/// Load config from ~/.config/bewaur/config.toml, falling back to defaults.
 pub fn load_config() -> Config {
     let path = config_path();
     match std::fs::read_to_string(&path) {
@@ -58,7 +58,7 @@ pub fn load_config() -> Config {
     }
 }
 
-/// Save config to ~/.config/traur/config.toml, creating directory if needed.
+/// Save config to ~/.config/bewaur/config.toml, creating directory if needed.
 pub fn save_config(config: &Config) -> Result<(), String> {
     let path = config_path();
     if let Some(parent) = path.parent() {
@@ -82,7 +82,7 @@ pub fn add_to_whitelist(package: &str) -> Result<(), String> {
 }
 
 /// Check if a package is whitelisted in the given config.
-#[allow(dead_code)] // Used by traur-hook binary
+#[allow(dead_code)] // Used by bewaur-hook binary
 pub fn is_whitelisted_in(config: &Config, package: &str) -> bool {
     config.whitelist.packages.iter().any(|p| p == package)
 }
@@ -106,7 +106,7 @@ pub fn remove_from_ignored(signal_id: &str) -> Result<(), String> {
 
 /// Check if a signal should be ignored (by individual ID or by category).
 /// Ignoring "SA-FOO" also suppresses "IS-SA-FOO".
-#[allow(dead_code)] // Used by coordinator and traur-hook
+#[allow(dead_code)] // Used by coordinator and bewaur-hook
 pub fn is_signal_ignored(
     config: &Config,
     signal_id: &str,
@@ -153,22 +153,22 @@ pub fn remove_category_from_ignored(category: &str) -> Result<(), String> {
 
 pub fn config_path() -> std::path::PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return std::path::PathBuf::from(xdg).join("traur").join("config.toml");
+        return std::path::PathBuf::from(xdg).join("bewaur").join("config.toml");
     }
 
     // When running under sudo/doas (e.g. ALPM hook), resolve the invoking
     // user's home so we read *their* config instead of /root's.
     if let Some(home) = calling_user_home() {
-        return home.join(".config").join("traur").join("config.toml");
+        return home.join(".config").join("bewaur").join("config.toml");
     }
 
     if let Ok(home) = std::env::var("HOME") {
         std::path::PathBuf::from(home)
             .join(".config")
-            .join("traur")
+            .join("bewaur")
             .join("config.toml")
     } else {
-        std::path::PathBuf::from("/etc/traur/config.toml")
+        std::path::PathBuf::from("/etc/bewaur/config.toml")
     }
 }
 

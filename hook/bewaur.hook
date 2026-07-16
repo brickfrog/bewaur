@@ -7,8 +7,7 @@ Target = *
 [Action]
 Description = Scanning packages for security issues...
 When = PreTransaction
-Exec = /usr/bin/traur-hook
-Depends = traur
+Exec = /usr/bin/bewaur-hook
+Depends = bewaur
 NeedsTargets
 AbortOnFail
-NetworkAccess = allowed

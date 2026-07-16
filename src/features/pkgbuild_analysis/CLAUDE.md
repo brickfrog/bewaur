@@ -33,4 +33,4 @@ All signals use `SignalCategory::Pkgbuild` (weight 0.45). See `data/patterns.tom
 - `P-PYTHON-INLINE` (+45): Legitimate packages may use `python -c` for version checks or build logic.
 - `P-CLIPBOARD-READ` (+50): Clipboard managers legitimately use xclip/xsel/wl-paste.
 - `P-UDEV-RULE` (+45): Some legitimate packages install udev rules.
-- `P-PACMAN-HOOK` (+50): Some legitimate packages install pacman hooks (e.g., traur itself).
+- `P-PACMAN-HOOK` (+50): Some legitimate packages install pacman hooks (e.g., bewaur itself).

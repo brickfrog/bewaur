@@ -1,4 +1,4 @@
-//! traur-hook: ALPM pre-transaction hook binary.
+//! bewaur-hook: ALPM pre-transaction hook binary.
 //! Reads package names from stdin (passed by pacman/paru via NeedsTargets),
 //! filters to AUR-only packages, scans each silently, then shows a summary.
 //! Detail is only printed for SKETCHY+ packages. No prompt when all clean.
@@ -11,11 +11,11 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::collections::HashSet;
 use std::process::Command;
 use colored::Colorize;
-use traur::coordinator;
-use traur::shared::bulk;
-use traur::shared::config::{self, is_whitelisted_in};
-use traur::shared::output;
-use traur::shared::scoring::{ScanResult, Tier};
+use bewaur::coordinator;
+use bewaur::shared::bulk;
+use bewaur::shared::config::{self, is_whitelisted_in};
+use bewaur::shared::output;
+use bewaur::shared::scoring::{ScanResult, Tier};
 
 fn main() {
     // Force colored output — ALPM hooks inherit the terminal but colored
@@ -60,9 +60,9 @@ fn main() {
         tty,
         "{}",
         r#"
-  ╔╦╗╦═╗╔═╗╦ ╦╦═╗
-   ║ ╠╦╝╠═╣║ ║╠╦╝
-   ╩ ╩╚═╩ ╩╚═╝╩╚═"#
+  ╔╗ ╔═╗╦ ╦╔═╗╦ ╦╦═╗
+  ╠╩╗║╣ ║║║╠═╣║ ║╠╦╝
+  ╚═╝╚═╝╚╩╝╩ ╩╚═╝╩╚═"#
             .red()
             .bold()
     );
@@ -93,7 +93,7 @@ fn main() {
             let _ = writeln!(
                 tty,
                 "{}",
-                "traur: AUR metadata could not be fetched — blocking transaction"
+                "bewaur: AUR metadata could not be fetched — blocking transaction"
                     .red()
                     .bold()
             );
@@ -234,11 +234,11 @@ fn main() {
         let _ = writeln!(
             tty,
             "{}",
-            "traur: MALICIOUS package(s) detected — blocking transaction".red().bold()
+            "bewaur: MALICIOUS package(s) detected — blocking transaction".red().bold()
         );
         let _ = writeln!(
             tty,
-            "traur: use 'traur allow <package>' to whitelist, then retry"
+            "bewaur: use 'bewaur allow <package>' to whitelist, then retry"
         );
         std::process::exit(1);
     }
@@ -249,11 +249,11 @@ fn main() {
         let _ = writeln!(
             tty,
             "{}",
-            "traur: scan errors occurred — blocking transaction".red().bold()
+            "bewaur: scan errors occurred — blocking transaction".red().bold()
         );
         let _ = writeln!(
             tty,
-            "traur: use 'traur allow <package>' to whitelist failed packages, then retry"
+            "bewaur: use 'bewaur allow <package>' to whitelist failed packages, then retry"
         );
         std::process::exit(1);
     }
@@ -261,7 +261,7 @@ fn main() {
     // Case 4: SKETCHY or SUSPICIOUS -> prompt [y/N]
     if has_flagged {
         let _ = writeln!(tty);
-        let _ = write!(tty, "{} ", "traur: Continue with installation? [y/N]".bold());
+        let _ = write!(tty, "{} ", "bewaur: Continue with installation? [y/N]".bold());
         let _ = tty.flush();
 
         let mut reader = BufReader::new(tty);
@@ -275,7 +275,7 @@ fn main() {
         let proceed = matches!(response.to_lowercase().as_str(), "y" | "yes");
 
         if !proceed {
-            eprintln!("traur: aborting transaction");
+            eprintln!("bewaur: aborting transaction");
             std::process::exit(1);
         }
         return;

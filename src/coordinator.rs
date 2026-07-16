@@ -31,7 +31,7 @@ pub fn build_context(package_name: &str) -> Result<PackageContext, String> {
 
     // Clone/pull the AUR git repo
     let git_cache = cache::git_cache_dir();
-    let cache_str = git_cache.to_str().unwrap_or("/tmp/traur-git");
+    let cache_str = git_cache.to_str().unwrap_or("/tmp/bewaur-git");
 
     let repo_path = aur_git::ensure_repo(package_base, cache_str)?;
 
@@ -100,7 +100,7 @@ pub fn build_context_prefetched(
         .unwrap_or(package_name);
 
     let git_cache = cache::git_cache_dir();
-    let cache_str = git_cache.to_str().unwrap_or("/tmp/traur-git");
+    let cache_str = git_cache.to_str().unwrap_or("/tmp/bewaur-git");
 
     let repo_path = aur_git::ensure_repo(package_base, cache_str)?;
 

@@ -1,41 +1,41 @@
 # Package
 
-AUR distribution files. Follows [Rust package guidelines](https://wiki.archlinux.org/title/Rust_package_guidelines).
+Local Arch package for the personal fork. This package is not published to the
+AUR and there is no prebuilt `-bin` package.
 
-## PKGBUILDs
+## Build and install
 
-- `PKGBUILD` — source package (`traur`). Uses `prepare()` with `--locked`, `build()` with `--frozen`, `check()` with `cargo test --frozen`.
-- `PKGBUILD-bin` — binary package (`traur-bin`). Downloads prebuilt tarball from GitHub releases.
+From a committed repository root:
 
-Both PKGBUILDs select `traur-network.hook` when the build host's pacman supports
-`--disable-sandbox-network`; otherwise they install the portable `traur.hook`.
-Binary release archives must contain both hook files.
+```bash
+pkgver=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+git archive \
+  --format=tar.gz \
+  --prefix="bewaur-${pkgver}/" \
+  --output="pkg/bewaur-${pkgver}.tar.gz" \
+  HEAD
 
-Both install LICENSE to `/usr/share/licenses/`.
+(cd pkg && makepkg -Ccfsi)
+```
 
-## Release workflow
+`PKGBUILD` uses `--locked`/`--frozen`, runs the test suite, and packages the
+generated local archive. Its `SKIP` checksum is intentional for this local-only
+workflow; use immutable sources and a real checksum before distributing it.
 
-Run `/release <version>` in Claude Code. This automates:
+The package conflicts with `traur` and `traur-bin`. Do not add `provides=('traur')`:
+the renamed CLI and state paths intentionally do not implement the old package
+interface.
 
-1. Validate version, run tests, build release
-2. Bump version in Cargo.toml and both PKGBUILDs (reset pkgrel=1)
-3. Commit, tag, push to GitHub
-4. Create release tarball (including both ALPM hook variants) and GitHub release
-5. Update sha256sums, commit, push
-6. Sync `aur/` and `aur-bin/` repos (copy PKGBUILD, generate .SRCINFO, push to AUR)
-
-## AUR repos
-
-Both live as subdirectories with their own git remotes:
-- `aur/` → `ssh://aur@aur.archlinux.org/traur.git` (master branch)
-- `aur-bin/` → `ssh://aur@aur.archlinux.org/traur-bin.git` (master branch)
+Packaging selects `bewaur-network.hook` when the build host's pacman supports
+`--disable-sandbox-network`; otherwise it installs the portable `bewaur.hook`.
+Both variants install to the destination name `bewaur.hook`.
 
 ## Installed files
 
 | File | Path |
 |------|------|
-| CLI binary | `/usr/bin/traur` |
-| Hook binary | `/usr/bin/traur-hook` |
-| ALPM hook | `/usr/share/libalpm/hooks/traur.hook` |
-| Pattern DB | `/usr/share/traur/patterns.toml` |
-| License | `/usr/share/licenses/traur/LICENSE` |
+| CLI binary | `/usr/bin/bewaur` |
+| Hook binary | `/usr/bin/bewaur-hook` |
+| ALPM hook | `/usr/share/libalpm/hooks/bewaur.hook` |
+| Pattern DB | `/usr/share/bewaur/patterns.toml` |
+| License | `/usr/share/licenses/bewaur/LICENSE` |

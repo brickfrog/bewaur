@@ -1461,7 +1461,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "traur"
+name = "bewaur"
 version = "0.4.1"
 dependencies = [
  "clap",

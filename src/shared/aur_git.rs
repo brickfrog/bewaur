@@ -208,14 +208,14 @@ mod tests {
     #[test]
     fn accepts_valid_package_name() {
         // Should pass validation — may succeed or fail on clone, but not on validation
-        if let Err(e) = ensure_repo("yay", "/tmp/traur-test-nonexistent") {
+        if let Err(e) = ensure_repo("yay", "/tmp/bewaur-test-nonexistent") {
             assert!(!e.contains("invalid package name"), "valid name rejected: {e}");
         }
     }
 
     #[test]
     fn accepts_complex_valid_name() {
-        if let Err(e) = ensure_repo("lib32-mesa+utils", "/tmp/traur-test-nonexistent") {
+        if let Err(e) = ensure_repo("lib32-mesa+utils", "/tmp/bewaur-test-nonexistent") {
             assert!(!e.contains("invalid package name"), "valid name rejected: {e}");
         }
     }

@@ -7,7 +7,11 @@ use clap::{Parser, Subcommand};
 use std::process;
 
 #[derive(Parser)]
-#[command(name = "traur", about = "Trust scoring for AUR packages")]
+#[command(
+    name = "bewaur",
+    version,
+    about = "Pre-install risk and trust scoring for AUR packages"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -282,7 +286,7 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
         println!("{json_str}");
     } else {
         println!();
-        println!("{}", "=== traur scan results ===".bold());
+        println!("{}", "=== bewaur scan results ===".bold());
         println!("  Scanned: {} packages ({} errors)", scanned, errors);
         println!(
             "  TRUSTED: {}  OK: {}  SKETCHY: {}  SUSPICIOUS: {}  MALICIOUS: {}",
@@ -444,7 +448,7 @@ fn cmd_ignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
         (Some(id), None) => {
             if !shared::signal_registry::is_known_signal(id) {
                 eprintln!("Unknown signal: {id}");
-                eprintln!("Use 'traur signals' to list available signal IDs.");
+                eprintln!("Use 'bewaur signals' to list available signal IDs.");
                 return 1;
             }
             match shared::config::add_to_ignored(id) {

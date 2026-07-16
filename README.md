@@ -1,31 +1,59 @@
-# traur
+# bewaur
 
-Trust scoring for AUR packages, written in Rust. Analyzes PKGBUILDs, install scripts, source URLs, metadata, and git history to score how much you should trust a package before installing it. Includes an ALPM hook that automatically scans packages before any install or upgrade transaction.
+**Inspect before you install.**
 
-<img width="859" height="640" alt="image" src="https://github.com/user-attachments/assets/768915bd-4aa2-4450-96c7-408e73e0d103" />
+Bewaur is a Rust CLI and ALPM hook that assigns AUR packages a pre-install trust
+score. It analyzes PKGBUILDs, install scripts, source URLs, metadata, maintainer
+history, and git history before pacman commits a transaction.
 
-
-
+This is a personal continuation of
+[traur](https://github.com/Sohimaster/traur), with a deliberately separate
+binary, hook, config, and cache identity.
 
 ## Installation
 
+Bewaur is not published to the AUR. Build a local Arch package from a committed
+checkout:
+
 ```bash
-paru -S traur
+git clone git@github.com:brickfrog/bewaur.git
+cd bewaur
+
+pkgver=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+git archive \
+  --format=tar.gz \
+  --prefix="bewaur-${pkgver}/" \
+  --output="pkg/bewaur-${pkgver}.tar.gz" \
+  HEAD
+
+(cd pkg && makepkg -Ccfsi)
 ```
 
-The package installs the portable ALPM hook on standard Arch pacman. On pacman
-builds that isolate hooks from the network (currently CachyOS), it detects that
-capability at package-build time and installs the opt-in hook required by traur's
-AUR, git, and reputation checks. Both hook variants are kept in `hook/` so binary
-release packages can make the same selection without breaking standard pacman.
+The package conflicts with `traur` and `traur-bin`, so pacman will offer to
+remove the old package rather than leave two pre-transaction hooks active.
+
+On CachyOS, packaging installs the hook variant containing
+`NetworkAccess = allowed`. Standard Arch pacman receives the portable hook.
+Selection is based on support for `pacman --disable-sandbox-network`.
+
+For development without installing the hook:
+
+```bash
+cargo build --release --frozen
+./target/release/bewaur scan paru-bin
+```
 
 ## Usage
 
 ```bash
-traur scan                # scan all installed aur packages
-traur scan <package>      # scan a package
-traur allow <package>     # whitelist a package
+bewaur scan                # scan all installed AUR packages
+bewaur scan <package>      # scan a package
+bewaur allow <package>     # whitelist a package
+bewaur signals             # list scoring signals
 ```
+
+Runtime state lives under `~/.config/bewaur/` and `~/.cache/bewaur/`. The fork
+does not read or migrate the previous `traur` state directories.
 
 ## How it works
 
@@ -49,6 +77,7 @@ traur allow <package>     # whitelist a package
 ## Detection coverage
 
 Patterns derived from real AUR malware incidents:
+
 - **CHAOS RAT (2025)** — browser impersonation packages, RAT distribution
 - **Google Chrome RAT (2025)** — .install script, Python download+execute
 - **Acroread (2018)** — orphan takeover, curl from paste service, systemd persistence

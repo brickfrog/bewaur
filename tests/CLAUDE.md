@@ -6,7 +6,10 @@
 - **Integration tests** (`tests/feature_tests.rs`): Full-pipeline tests using `scan_pkgbuild()` that verify coordinator + scoring + tier assignment across multiple features.
 - **Hook packaging tests** (`tests/hook_tests.rs`): Verify that the standard ALPM
   hook remains portable while the network-isolated pacman variant explicitly opts
-  in to networking.
+  in to networking, and that local packaging installs the renamed binaries and
+  conflicts with the old package.
+- **Identity tests** (`tests/identity_tests.rs`): Exercise the compiled CLI name,
+  version, help output, and absence of old binary targets.
 
 ## Fixtures
 

@@ -1,4 +1,4 @@
-# traur - Pre-install Trust Scoring for AUR Packages
+# bewaur - Pre-install Risk and Trust Scoring for AUR Packages
 
 Scores AUR packages before you install them. ALPM hook for pre-install scanning.
 
@@ -37,17 +37,20 @@ Override gates: 47 signals across download-and-execute, reverse shells, GTFOBins
 cargo build --release
 ```
 
-Binaries: `target/release/traur` (CLI) and `target/release/traur-hook` (ALPM hook).
+Binaries: `target/release/bewaur` (CLI) and `target/release/bewaur-hook` (ALPM hook).
 
-## Install hook
+## Install local package
 
 ```bash
-sudo install -Dm755 target/release/traur /usr/bin/traur
-sudo install -Dm755 target/release/traur-hook /usr/bin/traur-hook
-hook_file=hook/traur.hook
-pacman --disable-sandbox-network --version >/dev/null 2>&1 && hook_file=hook/traur-network.hook
-sudo install -Dm644 "$hook_file" /usr/share/libalpm/hooks/traur.hook
+pkgver=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+git archive --format=tar.gz --prefix="bewaur-${pkgver}/" \
+  --output="pkg/bewaur-${pkgver}.tar.gz" HEAD
+(cd pkg && makepkg -Ccfsi)
 ```
+
+The local package conflicts with the old `traur` packages so only one ALPM hook
+is active. Git operations use SSH (`git@github.com:brickfrog/bewaur.git`), not
+HTTPS remotes. HTTPS is acceptable only for web and download metadata.
 
 ## Adding a new feature
 
@@ -60,9 +63,11 @@ sudo install -Dm644 "$hook_file" /usr/share/libalpm/hooks/traur.hook
 
 Edit `data/patterns.toml`. Each pattern has: `id`, `pattern` (regex), `points`, `description`, `override_gate` (bool). Patterns are grouped by feature section name.
 
-## Release
+## Packaging
 
-Use `/release <version>` in Claude Code to run the full release workflow (bump version, build, GitHub release, update sha256sums, push to both AUR repos).
+`pkg/PKGBUILD` consumes the `pkg/bewaur-<version>.tar.gz` archive generated from
+the committed checkout. This is a local-only workflow: there is no AUR sync or
+prebuilt binary-release package.
 
 ## Key files
 
@@ -87,6 +92,6 @@ Use `/release <version>` in Claude Code to run the full release workflow (bump v
 | `src/shared/config.rs` | User config: whitelist, ignored signals/categories |
 | `data/patterns.toml` | Regex pattern database (239 patterns). Total signals: 279 (pattern + hardcoded) |
 | `src/bench.rs` | Batch benchmark (parallel scan, retry, stats) |
-| `hook/traur.hook` | ALPM hook definition |
-| `hook/traur-network.hook` | Network opt-in hook for pacman builds that isolate hooks |
-| `hook/traur-hook.rs` | Hook binary (filters AUR pkgs, runs scans) |
+| `hook/bewaur.hook` | ALPM hook definition |
+| `hook/bewaur-network.hook` | Network opt-in hook for pacman builds that isolate hooks |
+| `hook/bewaur-hook.rs` | Hook binary (filters AUR pkgs, runs scans) |

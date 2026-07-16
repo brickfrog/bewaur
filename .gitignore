@@ -2,3 +2,6 @@
 .idea/
 *.log
 pkg/*.tar.gz
+/pkg/src/
+/pkg/pkg/
+/pkg/*.pkg.tar.*

@@ -1,4 +1,4 @@
-# traur pattern database
+# bewaur pattern database
 # Each section corresponds to a feature name.
 # Patterns are regular expressions matched against file content.
 

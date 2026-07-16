@@ -26,7 +26,7 @@ pub fn fetch_github_stars(url: &str) -> Option<GitHubInfo> {
     let client = reqwest::blocking::Client::new();
     let mut request = client
         .get(&api_url)
-        .header("User-Agent", "traur")
+        .header("User-Agent", "bewaur")
         .header("Accept", "application/vnd.github.v3+json");
 
     // Support GITHUB_TOKEN for higher rate limits

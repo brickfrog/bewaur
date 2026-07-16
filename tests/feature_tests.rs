@@ -3,10 +3,10 @@
 //!
 //! Individual pattern/signal tests live in each feature's #[cfg(test)] module.
 
-use traur::coordinator::scan_pkgbuild;
-use traur::shared::scoring::Tier;
+use bewaur::coordinator::scan_pkgbuild;
+use bewaur::shared::scoring::Tier;
 
-fn signal_ids(result: &traur::shared::scoring::ScanResult) -> Vec<&str> {
+fn signal_ids(result: &bewaur::shared::scoring::ScanResult) -> Vec<&str> {
     result.signals.iter().map(|s| s.id.as_str()).collect()
 }
 

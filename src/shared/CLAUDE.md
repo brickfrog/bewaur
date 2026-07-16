@@ -12,7 +12,7 @@ Reusable modules consumed by features and the coordinator. Code goes here if it'
 | `scoring.rs` | `Signal`, `SignalCategory`, `Tier`, `ScanResult`, `compute_score()` | coordinator |
 | `patterns.rs` | Load TOML pattern rules, compile to regex | pkgbuild, install_script, source_url, gtfobins features |
 | `cache.rs` | Cache directory management (XDG_CACHE_HOME) | aur_git, aur_rpc |
-| `config.rs` | User config from ~/.config/traur/config.toml | coordinator |
+| `config.rs` | User config from ~/.config/bewaur/config.toml | coordinator |
 | `output.rs` | Colored text + JSON formatters for ScanResult | coordinator (via main.rs) |
 | `bulk.rs` | Count/URL-bounded metadata fetch, maintainer prefetch, clone-with-retry | bench, cmd_scan_all_installed, ALPM hook |
 | `github.rs` | GitHub API client (star count, repo existence). Supports `GITHUB_TOKEN` env var for higher rate limits | coordinator, github_stars feature |

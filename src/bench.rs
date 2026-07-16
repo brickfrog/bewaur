@@ -231,7 +231,7 @@ fn print_report(stats: &BenchStats) {
     };
 
     println!();
-    println!("{}", "=== traur bench results ===".bold());
+    println!("{}", "=== bewaur bench results ===".bold());
     println!();
     println!(
         "  Packages:    {} requested, {} scanned, {} errors",

@@ -16,10 +16,10 @@ pub fn git_cache_dir() -> PathBuf {
 
 fn dirs_or_default() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        PathBuf::from(xdg).join("traur")
+        PathBuf::from(xdg).join("bewaur")
     } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".cache").join("traur")
+        PathBuf::from(home).join(".cache").join("bewaur")
     } else {
-        PathBuf::from("/tmp/traur-cache")
+        PathBuf::from("/tmp/bewaur-cache")
     }
 }

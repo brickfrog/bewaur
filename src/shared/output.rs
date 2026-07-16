@@ -20,7 +20,7 @@ pub fn write_text(w: &mut dyn Write, result: &ScanResult, verbose: bool) {
     let _ = writeln!(
         w,
         "{} {} (trust: {}/100)",
-        "traur:".bold(),
+        "bewaur:".bold(),
         result.package.bold(),
         result.score
     );

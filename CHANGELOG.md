@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+- **Project identity**: the personal fork is renamed from `traur` to `bewaur`.
+  The CLI, hook binary, ALPM hook, config directory, cache directory, package,
+  output prefixes, and HTTP user agents all use the new name. Existing
+  `~/.config/traur` and `~/.cache/traur` state is intentionally not migrated.
+
 ### Fixed
 - **Hook fail-closed**: the ALPM hook now blocks the transaction when scans fail (git timeout, network error, etc.) instead of silently allowing unscanned packages through. Git clone/pull operations have a 30-second timeout to prevent indefinite hangs.
 - **CachyOS hook networking**: package builds now select a `NetworkAccess = allowed`

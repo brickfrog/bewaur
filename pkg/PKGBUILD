@@ -1,15 +1,16 @@
-# Maintainer: Sohimaster
-pkgname=traur
+# Maintainer: brickfrog
+pkgname=bewaur
 pkgver=0.4.1
 pkgrel=1
 pkgdesc='Trust scoring for AUR packages'
 arch=('x86_64')
-url='https://github.com/Sohimaster/traur'
+url='https://github.com/brickfrog/bewaur'
 license=('MIT')
-depends=('git' 'pacman' 'gcc-libs' 'glibc')
+depends=('git' 'pacman' 'gcc-libs' 'glibc' 'openssl')
 makedepends=('cargo')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('d1c206778c7b609ead78d2af6061ada99244cef42e6052c6e2ebeb0e00952922')
+conflicts=('traur' 'traur-bin')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
 
 prepare() {
     cd "$pkgname-$pkgver"
@@ -33,14 +34,14 @@ check() {
 
 package() {
     cd "$pkgname-$pkgver"
-    install -Dm0755 target/release/traur "$pkgdir/usr/bin/traur"
-    install -Dm0755 target/release/traur-hook "$pkgdir/usr/bin/traur-hook"
+    install -Dm0755 target/release/bewaur "$pkgdir/usr/bin/bewaur"
+    install -Dm0755 target/release/bewaur-hook "$pkgdir/usr/bin/bewaur-hook"
     # CachyOS pacman isolates hooks; stock pacman rejects its NetworkAccess key.
-    local hook_file=hook/traur.hook
+    local hook_file=hook/bewaur.hook
     if pacman --disable-sandbox-network --version >/dev/null 2>&1; then
-        hook_file=hook/traur-network.hook
+        hook_file=hook/bewaur-network.hook
     fi
-    install -Dm0644 "$hook_file" "$pkgdir/usr/share/libalpm/hooks/traur.hook"
-    install -Dm0644 data/patterns.toml "$pkgdir/usr/share/traur/patterns.toml"
+    install -Dm0644 "$hook_file" "$pkgdir/usr/share/libalpm/hooks/bewaur.hook"
+    install -Dm0644 data/patterns.toml "$pkgdir/usr/share/bewaur/patterns.toml"
     install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

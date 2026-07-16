@@ -1,17 +1,17 @@
 [package]
-name = "traur"
+name = "bewaur"
 version = "0.4.1"
 edition = "2024"
-description = "Trust scoring for AUR packages"
+description = "Pre-install risk and trust scoring for AUR packages"
 license = "MIT"
 
 [[bin]]
-name = "traur"
+name = "bewaur"
 path = "src/main.rs"
 
 [[bin]]
-name = "traur-hook"
-path = "hook/traur-hook.rs"
+name = "bewaur-hook"
+path = "hook/bewaur-hook.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
