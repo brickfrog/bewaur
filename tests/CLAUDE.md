@@ -25,6 +25,11 @@
 - **Cache command tests** (`tests/cache_tests.rs`): Exercise compiled CLI stats,
   selected-package pruning, traversal rejection, and explicit `--all` policy in
   an isolated XDG cache.
+- **Artifact tests** (`tests/artifact_tests.rs`): Build synthetic ALPM package
+  archives and exercise the compiled non-extracting inspector, including clean,
+  warning, and blocking outcomes; metadata identity; JSON ordering; traversal
+  and link-pivot refusal; GNU/PAX and compression failures; corrupt streams; and
+  transaction-time install-script analysis.
 
 ## Fixtures
 

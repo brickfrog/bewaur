@@ -29,6 +29,12 @@
   with wrapper, heredoc, and redirection-aware parsing instead of raw-text guesses.
 
 ### Added
+- **Built-artifact inspection**: add a bounded, non-extracting
+  `inspect-artifact` command that validates ALPM archive structure and identity,
+  scans transaction-time `.INSTALL` code, reports privileged payload and
+  persistence surfaces, binds results to SHA-256, and supports ordered text or
+  JSON reports for split-package outputs. Document a clean-chroot, root-owned
+  staging, inspect, and explicit `pacman -U` workflow.
 - **Exact local-tree approvals**: add versioned, policy-revisioned approval
   fingerprints over every entry in a fully loaded build tree, including VCS
   metadata and the build-root mode. Approved

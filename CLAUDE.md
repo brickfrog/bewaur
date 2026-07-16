@@ -91,6 +91,7 @@ prebuilt binary-release package.
 | `src/shared/local_build.rs` | Inert, path-confined Paru build-tree loader plus complete approval fingerprinting |
 | `src/shared/signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) |
 | `src/shared/config.rs` | Strict, locked, atomic user config: exact-tree approvals, explicit permanent allowances, ignored signals/categories |
+| `src/artifact.rs` | Bounded, non-extracting ALPM archive validation, identity checks, install-script scan, and artifact findings |
 | `data/patterns.toml` | Regex pattern database (239 patterns). Total signals: 279 (pattern + hardcoded) |
 | `src/bench.rs` | Batch benchmark (parallel scan, retry, stats) |
 | `hook/bewaur.hook` | ALPM hook definition |
@@ -111,3 +112,19 @@ shell. Unlike the interactive scan command and ALPM hook, the gate blocks
 approvals fingerprint every tree entry, including VCS state, remain visible to the scanner, and
 override only the final tier decision. Only an explicit package-base
 `allow --forever` is a total bypass of later tree reads and findings.
+
+## Built-artifact inspection
+
+`bewaur inspect-artifact` streams package archives and never calls a tar
+extraction API. Structural failures and artifact blockers are deliberately
+separate from normal scoring and cannot be overridden by source-tree approvals
+or permanent package allowances. The SHA-256 report is useful only when the
+same root-owned staged pathname is subsequently passed to `pacman -U`.
+
+The bounded parser uses raw tar entries. GNU/PAX extension headers, sparse
+entries, unsupported legacy compression, special files, traversal, duplicate
+paths, and link-pivot layouts fail closed. Keep these refusals explicit unless
+support is implemented with its own pre-allocation bounds and parser-differential
+tests. `.INSTALL` is the only archive payload routed through shell analyzers;
+ordinary executable payloads are classified by path and mode, not decoded as
+shell text.

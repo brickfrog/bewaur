@@ -51,6 +51,7 @@ bewaur scan <package>      # scan a package
 bewaur gate --build-dir .  # fail-closed scan before an AUR helper builds
 bewaur approve --build-dir .       # display the exact-tree scan/digest; do not save
 bewaur approve --build-dir . --reviewed <digest> # save only the reviewed inputs
+bewaur inspect-artifact --expected-pkgbase <base> ./*.pkg.tar.zst
 bewaur approvals [<base>]          # list exact and permanent authorization
 bewaur revoke <base>               # remove the exact-tree approval
 bewaur allow <base> --forever      # explicit name-wide emergency bypass
@@ -154,6 +155,80 @@ transaction, that hook prompts for
 `SKETCHY`/`SUSPICIOUS` results. Without a controlling terminal it still scans:
 clean results pass, while flagged results and scan errors block instead of
 silently skipping the check.
+
+## Inspect the package that was actually built
+
+The pre-build gate covers source inputs; `bewaur inspect-artifact` covers the
+resulting ALPM package bytes. It streams each archive without extracting or
+executing it, validates the root `.PKGINFO`, `.BUILDINFO`, and gzip-compressed
+`.MTREE`, checks metadata against the filename and optional expected package
+base, scans `.INSTALL` through the transaction-time analyzers, and reports a
+SHA-256 for the exact opened artifact. Multiple archive arguments are processed
+in order, including split-package outputs; `--json` emits one outcome per
+argument.
+
+Malformed archives, identity mismatches, path traversal, duplicate paths,
+link-pivot layouts, special files, unsafe modes, privileged account/sudo/loader
+payloads, suspicious install scripts, and resource-limit violations return
+nonzero. Common persistence surfaces such as pacman hooks, systemd units, udev
+rules, polkit policy, tmpfiles, sysusers, kernel modules, cron, PAM, NSS, and
+session startup files are reported for review but do not by themselves change
+the exit status. Artifact structural findings cannot be bypassed with a source
+tree approval or permanent package allowance.
+
+The bounded first version accepts uncompressed, zstd, gzip, xz, and bzip2 ALPM
+packages. It deliberately rejects legacy compression formats, sparse entries,
+and GNU/PAX extension headers instead of letting an archive parser interpret
+them outside Bewaur's limits. Absolute symlink targets used by normal Arch
+packages are treated as rooted in the installation filesystem; paths nested
+beneath any archive link are still rejected.
+
+For a clean build, install Arch's `devtools` package once and create a base
+chroot:
+
+```bash
+sudo mkarchroot /var/lib/bewaur/chroot/root base-devel
+```
+
+Then, from a fresh reviewed PKGBUILD directory with no old package outputs:
+
+```bash
+bewaur gate --build-dir .
+makechrootpkg -c -u -T -r /var/lib/bewaur/chroot
+
+pkgbase=$(sed -n 's/^[[:space:]]*pkgbase = //p' .SRCINFO | head -n 1)
+sudo install -d -o root -g root -m 0755 /var/lib/bewaur
+stage=$(sudo mktemp -d /var/lib/bewaur/artifacts.XXXXXX)
+sudo chmod 0755 "$stage"
+sudo install -o root -g root -m 0644 -- ./*.pkg.tar.zst "$stage"/
+artifacts=("$stage"/*.pkg.tar.zst)
+
+if sudo bewaur inspect-artifact --expected-pkgbase "$pkgbase" "${artifacts[@]}"; then
+  printf 'Review the report above. Install these exact artifacts? [y/N] '
+  read -r reply
+  case "$reply" in
+    [yY]) sudo pacman -U -- "${artifacts[@]}" ;;
+  esac
+fi
+```
+
+The root-owned staging directory keeps an unprivileged build process from
+replacing the inspected files before `pacman -U`; the explicit install uses the
+same paths that produced the displayed hashes. This is intentionally a manual
+handoff: Paru exposes a pre-build command but no equivalent post-build gate.
+
+A devtools "clean chroot" isolates build dependencies and the build functions;
+it is not complete containment for an adversarial PKGBUILD. `makechrootpkg`
+still performs source preparation and reads PKGBUILD metadata on the host. The
+static pre-build gate reduces that exposure but cannot prove arbitrary dynamic
+shell harmless. Build a package you already suspect is actively hostile inside
+a disposable VM, not merely a host-side devtools chroot.
+
+Artifact inspection does not verify signatures or provenance, prove arbitrary
+binaries benign, reconcile every payload byte with `.MTREE`, or install
+anything. It answers the narrower question of whether these exact archive bytes
+have a consistent identity and avoid obvious structural, privileged-payload,
+and transaction-script hazards.
 
 ## How it works
 

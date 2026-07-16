@@ -1,3 +1,4 @@
+mod artifact;
 mod bench;
 mod coordinator;
 mod features;
@@ -68,6 +69,20 @@ enum Commands {
     Cache {
         #[command(subcommand)]
         command: CacheCommands,
+    },
+    /// Inspect built ALPM package archives without extracting or executing them
+    InspectArtifact {
+        /// One or more .pkg.tar, .zst, .gz, .xz, or .bz2 package archives
+        #[arg(required = true, value_name = "ARCHIVE")]
+        archives: Vec<std::path::PathBuf>,
+
+        /// Require every artifact to identify this package base
+        #[arg(long, value_name = "PKGBASE")]
+        expected_pkgbase: Option<String>,
+
+        /// Emit one machine-readable outcome per artifact
+        #[arg(long)]
+        json: bool,
     },
     /// Permanently allow a package base by name, across all future tree changes
     Allow {
@@ -179,6 +194,11 @@ fn main() {
             reviewed,
         } => cmd_approve(&build_dir, reviewed.as_deref()),
         Commands::Cache { command } => cmd_cache(command),
+        Commands::InspectArtifact {
+            archives,
+            expected_pkgbase,
+            json,
+        } => cmd_inspect_artifact(&archives, expected_pkgbase.as_deref(), json),
         Commands::Allow { package, forever } => cmd_allow(&package, forever),
         Commands::Approvals { package } => cmd_approvals(package.as_deref()),
         Commands::Revoke {
@@ -684,6 +704,66 @@ fn cmd_approve(build_dir: &std::path::Path, reviewed_digest: Option<&str>) -> i3
             1
         }
     }
+}
+
+fn cmd_inspect_artifact(
+    archives: &[std::path::PathBuf],
+    expected_pkgbase: Option<&str>,
+    json: bool,
+) -> i32 {
+    let config = match shared::config::load_config_strict() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("bewaur inspect-artifact: {error}");
+            return 1;
+        }
+    };
+    if let Some(expected) = expected_pkgbase
+        && let Err(error) = shared::aur_git::validate_package_name(expected)
+    {
+        eprintln!("bewaur inspect-artifact: invalid expected package base: {error}");
+        return 1;
+    }
+
+    let mut outcomes = Vec::with_capacity(archives.len());
+    for archive in archives {
+        let outcome = match artifact::inspect_artifact(archive, expected_pkgbase, &config) {
+            Ok(report) => artifact::ArtifactOutcome::inspected(report),
+            Err(error) => artifact::ArtifactOutcome::failed(archive, error),
+        };
+        outcomes.push(outcome);
+    }
+    let blocked = outcomes.iter().any(artifact::ArtifactOutcome::blocks);
+
+    if json {
+        match serde_json::to_string_pretty(&outcomes) {
+            Ok(output) => println!("{output}"),
+            Err(error) => {
+                eprintln!("bewaur inspect-artifact: cannot serialize report: {error}");
+                return 1;
+            }
+        }
+    } else {
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+        for (index, outcome) in outcomes.iter().enumerate() {
+            if index > 0 {
+                use std::io::Write;
+                let _ = writeln!(writer);
+            }
+            if let Some(report) = &outcome.report {
+                if let Err(error) = artifact::write_text(report, &mut writer) {
+                    eprintln!("bewaur inspect-artifact: cannot write report: {error}");
+                    return 1;
+                }
+            } else if let Some(error) = &outcome.error {
+                eprintln!("Artifact: {}", outcome.artifact);
+                eprintln!("Error:    {error}");
+            }
+        }
+    }
+
+    if blocked { 1 } else { 0 }
 }
 
 fn cmd_allow(package: &str, forever: bool) -> i32 {

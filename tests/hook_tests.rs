@@ -39,6 +39,7 @@ fn packages_select_the_network_hook_by_capability() {
     assert!(SOURCE_PKGBUILD.contains("target/release/bewaur"));
     assert!(SOURCE_PKGBUILD.contains("target/release/bewaur-hook"));
     assert!(SOURCE_PKGBUILD.contains("conflicts=('traur' 'traur-bin')"));
+    assert!(SOURCE_PKGBUILD.contains("'xz'"));
     assert!(SOURCE_PKGBUILD.contains("/usr/share/libalpm/hooks/bewaur.hook"));
     assert!(!SOURCE_PKGBUILD.contains("target/release/traur"));
     assert!(!SOURCE_PKGBUILD.contains("/usr/bin/traur"));
