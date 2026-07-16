@@ -242,11 +242,11 @@ fn cmd_gate(build_dir: &std::path::Path) -> i32 {
         }
     };
 
-    let pkgbuild_analysis_content = tree.pkgbuild_analysis_content();
     let result = coordinator::scan_local_build_with_config(
         &tree.pkgbase,
-        &pkgbuild_analysis_content,
+        &tree.pkgbuild_content,
         tree.install_script_content.as_deref(),
+        tree.local_source_content.as_deref(),
         &config,
     );
     shared::output::print_text(&result, true);
@@ -402,7 +402,7 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
                     .unwrap_or_default();
 
                 match clone_with_retry(name, meta, maint_pkgs) {
-                    Ok(ctx) => Ok(coordinator::run_analysis_with_config(&ctx, &config)),
+                    Ok(ctx) => Ok(coordinator::run_scan_context_with_config(&ctx, &config)),
                     Err(e) => Err(e),
                 }
             } else {

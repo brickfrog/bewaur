@@ -2,6 +2,13 @@ const PORTABLE_HOOK: &str = include_str!("../hook/bewaur.hook");
 const NETWORK_HOOK: &str = include_str!("../hook/bewaur-network.hook");
 const SOURCE_PKGBUILD: &str = include_str!("../pkg/PKGBUILD");
 
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
+
 #[test]
 fn portable_hook_uses_only_upstream_alpm_keys() {
     assert!(!PORTABLE_HOOK.contains("NetworkAccess"));
@@ -33,4 +40,50 @@ fn packages_select_the_network_hook_by_capability() {
     assert!(!SOURCE_PKGBUILD.contains("/usr/bin/traur"));
     assert!(!SOURCE_PKGBUILD.contains("/usr/share/libalpm/hooks/traur.hook"));
     assert!(!SOURCE_PKGBUILD.contains("/usr/share/traur"));
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_without_a_controlling_tty_still_reaches_a_fail_closed_decision() {
+    unsafe extern "C" {
+        fn setsid() -> i32;
+    }
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bewaur-hook"));
+    command
+        .env("PATH", "/nonexistent")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // SAFETY: `setsid` is async-signal-safe and is the only operation run in
+    // the child between fork and exec. It guarantees /dev/tty cannot be opened.
+    unsafe {
+        command.pre_exec(|| {
+            if setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    let mut child = command.spawn().expect("failed to run detached hook");
+    let package = "x".repeat(5_000);
+    writeln!(child.stdin.take().unwrap(), "{package}").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "a missing tty must not bypass metadata validation: {stderr}"
+    );
+    assert!(
+        stderr.contains("exceeds the AUR RPC URL length limit"),
+        "the hook did not reach metadata validation: {stderr}"
+    );
+    assert!(
+        stderr.contains("AUR metadata could not be fetched — blocking transaction"),
+        "the hook did not make a fail-closed decision: {stderr}"
+    );
 }

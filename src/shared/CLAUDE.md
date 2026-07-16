@@ -8,7 +8,7 @@ Reusable modules consumed by features and the coordinator. Code goes here if it'
 |--------|---------|---------|
 | `models.rs` | `PackageContext` (with `github_stars`, `github_not_found`, `aur_comments`), `AurPackage`, `GitCommit` | All features |
 | `aur_rpc.rs` | AUR RPC v5 API client (reqwest, blocking; encoded queries and bounded HTTP diagnostics) | coordinator, metadata, maintainer, name features |
-| `aur_git.rs` | Git clone/pull/diff/log operations | coordinator, pkgbuild, install_script, git_history features |
+| `aur_git.rs` | Strict AUR Git refresh to an explicitly fetched `master`, dirty/stale cache rejection, and diff/log operations | coordinator, pkgbuild, install_script, git_history features |
 | `scoring.rs` | `Signal`, `SignalCategory`, `Tier`, `ScanResult`, `compute_score()` | coordinator |
 | `patterns.rs` | Load TOML pattern rules, compile to regex | pkgbuild, install_script, source_url, gtfobins features |
 | `cache.rs` | XDG cache paths plus non-symlink-following stats and validated, explicit Git-cache pruning | aur_git, aur_rpc, CLI |
@@ -18,7 +18,7 @@ Reusable modules consumed by features and the coordinator. Code goes here if it'
 | `github.rs` | GitHub API client (star count, repo existence). Supports `GITHUB_TOKEN` env var for higher rate limits | coordinator, github_stars feature |
 | `aur_comments.rs` | AUR package page HTML scraper for comment extraction | coordinator, aur_comments_analysis feature |
 | `js_package_manager.rs` | Non-executing active-shell parsing for named JS installs, June incident IOCs, dependency arrays, and privileged chmod/install modes | pkgbuild, install_script, pkgbuild_diff, gtfobins features |
-| `local_build.rs` | Inert `.SRCINFO`/PKGBUILD/install loader plus position-aware install extraction and bounded, lossy executable-helper discovery with canonical path confinement | pre-build gate |
+| `local_build.rs` | Inert `.SRCINFO`/PKGBUILD/install loader plus position-aware install extraction and bounded, lossy executable-helper discovery with canonical path confinement | pre-build gate, network-backed scans |
 | `shell_syntax.rs` | Non-executing shell comment and command-word lexer | pattern and shell analysis |
 | `signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) | cmd_signals, cmd_ignore |
 

@@ -9,6 +9,13 @@
   `~/.config/traur` and `~/.cache/traur` state is intentionally not migrated.
 
 ### Fixed
+- **Complete, current scans**: network and hook scans now require a clean cache
+  entry at the exact freshly fetched AUR `master` commit, reject stale or dirty
+  repositories, and use the same path-confined `.SRCINFO`, install-script, and
+  executable-helper loader as the pre-build gate.
+- **Noninteractive hook policy**: an unavailable `/dev/tty` no longer skips the
+  ALPM scan. Clean packages still pass unattended transactions, while flagged
+  packages and operational scan errors block when no user can answer a prompt.
 - **Hook fail-closed**: the ALPM hook now blocks the transaction when scans fail (git timeout, network error, etc.) instead of silently allowing unscanned packages through. Git clone/pull operations have a 30-second timeout to prevent indefinite hangs.
 - **CachyOS hook networking**: package builds now select a `NetworkAccess = allowed`
   hook on pacman variants that isolate ALPM hooks from the network, while retaining

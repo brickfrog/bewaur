@@ -3,25 +3,88 @@
 //! filters to AUR-only packages, scans each silently, then shows a summary.
 //! Detail is only printed for SKETCHY+ packages. No prompt when all clean.
 //!
-//! All output goes to /dev/tty — pacman buffers both stdout and stderr from
-//! hooks, so we must write directly to the terminal.
+//! Interactive output and confirmation use /dev/tty. When no controlling
+//! terminal is available, output falls back to stderr and the hook still scans;
+//! any result that would require confirmation is blocked.
 
-use std::fs::OpenOptions;
-use std::io::{self, BufRead, BufReader, Write};
-use std::collections::HashSet;
-use std::process::Command;
-use colored::Colorize;
 use bewaur::coordinator;
 use bewaur::shared::bulk;
 use bewaur::shared::config::{self, is_whitelisted_in};
 use bewaur::shared::output;
 use bewaur::shared::scoring::{ScanResult, Tier};
+use colored::Colorize;
+use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Write};
+use std::process::Command;
+
+enum HookIo {
+    Interactive(File),
+    NonInteractive(io::Stderr),
+}
+
+impl HookIo {
+    fn open() -> Self {
+        match OpenOptions::new().read(true).write(true).open("/dev/tty") {
+            Ok(tty) => Self::Interactive(tty),
+            Err(_) => Self::NonInteractive(io::stderr()),
+        }
+    }
+
+    fn is_interactive(&self) -> bool {
+        matches!(self, Self::Interactive(_))
+    }
+
+    fn read_line(&mut self, line: &mut String) -> io::Result<usize> {
+        match self {
+            Self::Interactive(tty) => BufReader::new(tty).read_line(line),
+            Self::NonInteractive(_) => Ok(0),
+        }
+    }
+}
+
+impl Write for HookIo {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Interactive(tty) => tty.write(buf),
+            Self::NonInteractive(stderr) => stderr.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Interactive(tty) => tty.flush(),
+            Self::NonInteractive(stderr) => stderr.flush(),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum GateDecision {
+    Allow,
+    BlockMalicious,
+    BlockScanErrors,
+    BlockFlaggedNonInteractive,
+    PromptFlagged,
+}
+
+fn gate_decision(tier_counts: &[u32; 5], has_scan_errors: bool, interactive: bool) -> GateDecision {
+    if tier_counts[4] > 0 {
+        GateDecision::BlockMalicious
+    } else if has_scan_errors {
+        GateDecision::BlockScanErrors
+    } else if tier_counts[2] > 0 || tier_counts[3] > 0 {
+        if interactive {
+            GateDecision::PromptFlagged
+        } else {
+            GateDecision::BlockFlaggedNonInteractive
+        }
+    } else {
+        GateDecision::Allow
+    }
+}
 
 fn main() {
-    // Force colored output — ALPM hooks inherit the terminal but colored
-    // crate can't detect it since stdin is a pipe.
-    colored::control::set_override(true);
-
     // Collect all package names from stdin (ALPM NeedsTargets)
     let stdin = io::stdin();
     let packages: Vec<String> = stdin
@@ -47,17 +110,16 @@ fn main() {
         return;
     }
 
-    // Open /dev/tty for ALL output — pacman buffers both stdout and stderr
-    // from hooks, so only direct tty writes appear immediately.
-    let mut tty = match OpenOptions::new().read(true).write(true).open("/dev/tty") {
-        Ok(f) => f,
-        Err(_) => return, // non-interactive, skip silently
-    };
+    // A controlling terminal gives immediate hook output and an independent
+    // confirmation channel. Without one, continue fail-closed using stderr.
+    let mut hook_io = HookIo::open();
+    let interactive = hook_io.is_interactive();
+    colored::control::set_override(interactive);
 
     let config = config::load_config();
 
     let _ = writeln!(
-        tty,
+        hook_io,
         "{}",
         r#"
   ╔╗ ╔═╗╦ ╦╔═╗╦ ╦╦═╗
@@ -66,8 +128,8 @@ fn main() {
             .red()
             .bold()
     );
-    let _ = writeln!(tty, "  {}", "Trust scoring for AUR packages".dimmed());
-    let _ = writeln!(tty);
+    let _ = writeln!(hook_io, "  {}", "Trust scoring for AUR packages".dimmed());
+    let _ = writeln!(hook_io);
 
     // --- Phase 1: Collect results silently ---
 
@@ -89,9 +151,9 @@ fn main() {
     let metadata = match bulk::batch_fetch_metadata(&to_scan) {
         Ok(metadata) => metadata,
         Err(e) => {
-            let _ = writeln!(tty, "{}", format!("  error: {e}").red());
+            let _ = writeln!(hook_io, "{}", format!("  error: {e}").red());
             let _ = writeln!(
-                tty,
+                hook_io,
                 "{}",
                 "bewaur: AUR metadata could not be fetched — blocking transaction"
                     .red()
@@ -107,7 +169,7 @@ fn main() {
         .collect();
     if !not_found.is_empty() {
         let _ = writeln!(
-            tty,
+            hook_io,
             "  Skipping {} not on AUR: {}",
             not_found.len(),
             not_found.join(", ")
@@ -130,8 +192,14 @@ fn main() {
 
     for (i, pkg) in scan_packages.iter().enumerate() {
         // Progress indicator (single line, overwritten each iteration)
-        let _ = write!(tty, "\r  Scanning {} ({}/{})...          ", pkg, i + 1, total_scan);
-        let _ = tty.flush();
+        let _ = write!(
+            hook_io,
+            "\r  Scanning {} ({}/{})...          ",
+            pkg,
+            i + 1,
+            total_scan
+        );
+        let _ = hook_io.flush();
 
         let meta = metadata.get(pkg.as_str()).cloned().unwrap();
         let maint_pkgs = meta
@@ -143,7 +211,7 @@ fn main() {
 
         match bulk::clone_with_retry(pkg, meta, maint_pkgs) {
             Ok(ctx) => {
-                let result = coordinator::run_analysis_with_config(&ctx, &config);
+                let result = coordinator::run_scan_context_with_config(&ctx, &config);
                 let idx = match result.tier {
                     Tier::Trusted => 0,
                     Tier::Ok => 1,
@@ -161,8 +229,8 @@ fn main() {
     }
 
     // Clear the progress line
-    let _ = write!(tty, "\r{}\r", " ".repeat(72));
-    let _ = tty.flush();
+    let _ = write!(hook_io, "\r{}\r", " ".repeat(72));
+    let _ = hook_io.flush();
 
     // --- Phase 2: Output + decision ---
 
@@ -170,7 +238,7 @@ fn main() {
     if !any_scanned {
         if whitelisted_count > 0 {
             let _ = writeln!(
-                tty,
+                hook_io,
                 "  {} package(s) whitelisted, nothing to scan.",
                 whitelisted_count
             );
@@ -180,7 +248,7 @@ fn main() {
 
     // Print tier summary
     let scanned: u32 = tier_counts.iter().sum();
-    let _ = writeln!(tty, "  Scanned: {} package(s)", scanned);
+    let _ = writeln!(hook_io, "  Scanned: {} package(s)", scanned);
 
     let tier_labels = [
         ("TRUSTED", tier_counts[0]),
@@ -205,84 +273,101 @@ fn main() {
         })
         .collect();
     if !tier_parts.is_empty() {
-        let _ = writeln!(tty, "  {}", tier_parts.join("  "));
+        let _ = writeln!(hook_io, "  {}", tier_parts.join("  "));
     }
 
     // Full detail for all results
     if !results.is_empty() {
         results.sort_by(|a, b| a.score.cmp(&b.score));
         for result in &results {
-            let _ = writeln!(tty);
-            output::write_text(&mut tty, result, false);
+            let _ = writeln!(hook_io);
+            output::write_text(&mut hook_io, result, false);
         }
     }
 
     // Print scan errors
     if !scan_errors.is_empty() {
-        let _ = writeln!(tty);
+        let _ = writeln!(hook_io);
         for (pkg, err) in &scan_errors {
-            let _ = writeln!(tty, "{}", format!("  error: {pkg}: {err}").red());
+            let _ = writeln!(hook_io, "{}", format!("  error: {pkg}: {err}").red());
         }
     }
 
-    let has_malicious = tier_counts[4] > 0;
-    let has_flagged = tier_counts[2] > 0 || tier_counts[3] > 0; // SKETCHY or SUSPICIOUS
-
-    // Case 2: MALICIOUS detected -> hard block, must whitelist
-    if has_malicious {
-        let _ = writeln!(tty);
-        let _ = writeln!(
-            tty,
-            "{}",
-            "bewaur: MALICIOUS package(s) detected — blocking transaction".red().bold()
-        );
-        let _ = writeln!(
-            tty,
-            "bewaur: use 'bewaur allow <package>' to whitelist, then retry"
-        );
-        std::process::exit(1);
-    }
-
-    // Case 3: Scan errors -> hard block (fail closed)
-    if !scan_errors.is_empty() {
-        let _ = writeln!(tty);
-        let _ = writeln!(
-            tty,
-            "{}",
-            "bewaur: scan errors occurred — blocking transaction".red().bold()
-        );
-        let _ = writeln!(
-            tty,
-            "bewaur: use 'bewaur allow <package>' to whitelist failed packages, then retry"
-        );
-        std::process::exit(1);
-    }
-
-    // Case 4: SKETCHY or SUSPICIOUS -> prompt [y/N]
-    if has_flagged {
-        let _ = writeln!(tty);
-        let _ = write!(tty, "{} ", "bewaur: Continue with installation? [y/N]".bold());
-        let _ = tty.flush();
-
-        let mut reader = BufReader::new(tty);
-        let mut line = String::new();
-        let response = match reader.read_line(&mut line) {
-            Ok(0) => "",
-            Ok(_) => line.trim(),
-            Err(_) => "",
-        };
-
-        let proceed = matches!(response.to_lowercase().as_str(), "y" | "yes");
-
-        if !proceed {
-            eprintln!("bewaur: aborting transaction");
+    match gate_decision(&tier_counts, !scan_errors.is_empty(), interactive) {
+        // Case 2: MALICIOUS detected -> hard block, must whitelist
+        GateDecision::BlockMalicious => {
+            let _ = writeln!(hook_io);
+            let _ = writeln!(
+                hook_io,
+                "{}",
+                "bewaur: MALICIOUS package(s) detected — blocking transaction"
+                    .red()
+                    .bold()
+            );
+            let _ = writeln!(
+                hook_io,
+                "bewaur: use 'bewaur allow <package>' to whitelist, then retry"
+            );
             std::process::exit(1);
         }
-        return;
-    }
+        // Case 3: Scan errors -> hard block (fail closed)
+        GateDecision::BlockScanErrors => {
+            let _ = writeln!(hook_io);
+            let _ = writeln!(
+                hook_io,
+                "{}",
+                "bewaur: scan errors occurred — blocking transaction"
+                    .red()
+                    .bold()
+            );
+            let _ = writeln!(
+                hook_io,
+                "bewaur: use 'bewaur allow <package>' to whitelist failed packages, then retry"
+            );
+            std::process::exit(1);
+        }
+        // Case 4a: SKETCHY/SUSPICIOUS without a tty -> hard block. Reading
+        // ALPM's stdin here would consume target data, not user confirmation.
+        GateDecision::BlockFlaggedNonInteractive => {
+            let _ = writeln!(hook_io);
+            let _ = writeln!(
+                hook_io,
+                "{}",
+                "bewaur: package(s) require confirmation, but no interactive terminal is available — blocking transaction"
+                    .red()
+                    .bold()
+            );
+            std::process::exit(1);
+        }
+        // Case 4b: SKETCHY or SUSPICIOUS with a tty -> prompt [y/N]
+        GateDecision::PromptFlagged => {
+            let _ = writeln!(hook_io);
+            let _ = write!(
+                hook_io,
+                "{} ",
+                "bewaur: Continue with installation? [y/N]".bold()
+            );
+            let _ = hook_io.flush();
 
-    // Case 5: All clean -> no prompt
-    let _ = writeln!(tty, "\n  {}", "All packages look clean.".green());
+            let mut line = String::new();
+            let response = match hook_io.read_line(&mut line) {
+                Ok(0) => "",
+                Ok(_) => line.trim(),
+                Err(_) => "",
+            };
+
+            let proceed = matches!(response.to_lowercase().as_str(), "y" | "yes");
+
+            if !proceed {
+                let _ = writeln!(hook_io, "bewaur: aborting transaction");
+                std::process::exit(1);
+            }
+        }
+        // Case 5: All clean -> no prompt
+        GateDecision::Allow => {
+            let _ = writeln!(hook_io, "\n  {}", "All packages look clean.".green());
+        }
+    }
 }
 
 /// Get all package names from official sync databases in one call.
@@ -298,4 +383,51 @@ fn official_repo_packages() -> HashSet<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noninteractive_flagged_results_block_instead_of_prompting() {
+        assert_eq!(
+            gate_decision(&[0, 0, 1, 0, 0], false, false),
+            GateDecision::BlockFlaggedNonInteractive
+        );
+        assert_eq!(
+            gate_decision(&[0, 0, 0, 1, 0], false, false),
+            GateDecision::BlockFlaggedNonInteractive
+        );
+    }
+
+    #[test]
+    fn interactive_flagged_results_still_prompt() {
+        assert_eq!(
+            gate_decision(&[0, 0, 1, 0, 0], false, true),
+            GateDecision::PromptFlagged
+        );
+    }
+
+    #[test]
+    fn noninteractive_clean_results_are_allowed() {
+        assert_eq!(
+            gate_decision(&[1, 1, 0, 0, 0], false, false),
+            GateDecision::Allow
+        );
+    }
+
+    #[test]
+    fn operational_errors_and_malicious_results_block_in_every_mode() {
+        for interactive in [false, true] {
+            assert_eq!(
+                gate_decision(&[0, 0, 0, 0, 0], true, interactive),
+                GateDecision::BlockScanErrors
+            );
+            assert_eq!(
+                gate_decision(&[0, 0, 0, 0, 1], false, interactive),
+                GateDecision::BlockMalicious
+            );
+        }
+    }
 }

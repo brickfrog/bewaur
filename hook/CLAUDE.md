@@ -16,13 +16,13 @@ ALPM (pacman) hook integration for automatic pre-install scanning.
 3. `bewaur-hook` filters out official repo packages using `pacman -Sl`
 4. Batch-fetches AUR metadata to identify which packages actually exist on AUR; packages not found (e.g. local `-debug` split packages) are skipped with an info message
 5. Remaining AUR packages are scanned silently (progress indicator only)
-5. After all scans, a tier summary is printed (counts per tier)
-6. Decision logic:
+6. After all scans, a tier summary is printed (counts per tier)
+7. Decision logic:
    - **All TRUSTED/OK**: prints "All packages look clean.", exits 0 — no prompt
-   - **SKETCHY or SUSPICIOUS**: prints detail for flagged packages, prompts [y/N]
+   - **SKETCHY or SUSPICIOUS**: prints detail and prompts [y/N] with a controlling terminal; blocks when noninteractive
    - **MALICIOUS**: prints detail, hard-blocks (exit 1), must whitelist to proceed
    - **Scan errors**: hard-blocks (exit 1), fail-closed
-7. `AbortOnFail` in the hook definition causes pacman to abort on exit 1
+8. `AbortOnFail` in the hook definition causes pacman to abort on exit 1
 
 ## Installation
 
@@ -45,6 +45,9 @@ rejects the extension's `NetworkAccess` key, so it must continue to receive
 ## Design decisions
 
 - **Silent on clean**: TRUSTED/OK packages produce only a summary count. Detail is shown only for SKETCHY+ packages. No prompt when all packages are clean.
-- **Only MALICIOUS hard-blocks**: SKETCHY and SUSPICIOUS prompt the user [y/N] but don't require whitelisting. Only MALICIOUS packages force `bewaur allow` to proceed.
+- **Terminal-safe decisions**: `/dev/tty` is used only for an interactive
+  prompt, never ALPM's target-list stdin. Without a controlling terminal,
+  TRUSTED/OK results pass but SKETCHY/SUSPICIOUS results block because nobody
+  can approve them; MALICIOUS results always block.
 - **Fail closed**: If a scan errors out (git clone timeout, network failure, etc.), the hook blocks the transaction. Unscanned packages are not allowed through. Git operations have a 30-second timeout to prevent indefinite hangs. Packages not found on AUR are skipped (not treated as errors) since they are locally-built packages (e.g. `-debug` split packages).
 - **Official repo skip**: `pacman -Sl` is fast and reliable for filtering. AUR packages are not in sync databases.

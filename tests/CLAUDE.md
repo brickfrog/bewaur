@@ -7,7 +7,9 @@
 - **Hook packaging tests** (`tests/hook_tests.rs`): Verify that the standard ALPM
   hook remains portable while the network-isolated pacman variant explicitly opts
   in to networking, and that local packaging installs the renamed binaries and
-  conflicts with the old package.
+  conflicts with the old package. A detached-session regression also proves that
+  losing `/dev/tty` reaches the scanner and fails closed instead of skipping the
+  transaction check.
 - **Identity tests** (`tests/identity_tests.rs`): Exercise the compiled CLI name,
   version, help output, and absence of old binary targets.
 - **Pre-build gate tests** (`tests/gate_tests.rs`): Exercise the compiled Paru

@@ -1,6 +1,6 @@
 use crate::coordinator;
 use crate::shared::aur_rpc;
-use crate::shared::models::{AurPackage, PackageContext};
+use crate::shared::models::AurPackage;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -109,7 +109,7 @@ pub fn clone_with_retry(
     name: &str,
     metadata: AurPackage,
     maintainer_packages: Vec<AurPackage>,
-) -> Result<PackageContext, String> {
+) -> Result<coordinator::ScanContext, String> {
     for attempt in 0..MAX_RETRIES {
         match coordinator::build_context_prefetched(
             name,

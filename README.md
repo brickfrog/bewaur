@@ -61,7 +61,10 @@ does not read or migrate the previous `traur` state directories.
 
 `bewaur scan` fails with a nonzero exit status if any installed package cannot
 be scanned; an operational error never turns a partial bulk scan into a clean
-result.
+result. Every network-backed scan refreshes a clean cached repository to the
+exact fetched AUR `master` commit and applies the same path-confined build-tree
+loader used by `bewaur gate`; a failed refresh or unreadable declared input is
+an error rather than permission to use stale or partial data.
 
 ## Cache maintenance
 
@@ -119,7 +122,10 @@ reads, and all trust findings. Use it only after manually reviewing that exact
 build tree. Whitelisting one split-package output does not exempt its siblings;
 use `bewaur allow <pkgbase>` only when you intentionally want the whole build
 tree bypassed. The ALPM hook remains installed as a second, pre-transaction
-check.
+check. In an interactive pacman transaction, that hook prompts for
+`SKETCHY`/`SUSPICIOUS` results. Without a controlling terminal it still scans:
+clean results pass, while flagged results and scan errors block instead of
+silently skipping the check.
 
 ## How it works
 
