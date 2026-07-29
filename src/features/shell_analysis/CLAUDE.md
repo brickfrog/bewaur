@@ -5,7 +5,15 @@ Lightweight static analysis of PKGBUILD and install scripts that goes beyond reg
 ## What it detects
 
 ### Variable Resolution (SA-VAR-CONCAT-EXEC, SA-VAR-CONCAT-CMD)
-Tracks variable assignments (`VAR=value`) and resolves `$VAR`/`${VAR}` references. SA-VAR-CONCAT-EXEC detects download-and-execute pipes assembled from variables (override gate). SA-VAR-CONCAT-CMD only fires when a dangerous command is assembled from 2+ variable fragments (genuine concatenation obfuscation like `a=cu;b=rl;$a$b`); single-variable-holds-command cases are handled by SA-INDIRECT-EXEC instead. Uses word boundary matching to prevent substring false positives.
+Tracks variable assignments (`VAR=value`) in textual execution order and resolves
+`$VAR`/`${VAR}` references against the state available at each use. Later
+reassignments cannot rewrite earlier commands. SA-VAR-CONCAT-EXEC detects
+download-and-execute pipes assembled from variables (override gate).
+SA-VAR-CONCAT-CMD only fires when a dangerous command is assembled from 2+
+variable fragments (genuine concatenation obfuscation like
+`a=cu;b=rl;$a$b`); single-variable-holds-command cases are handled by
+SA-INDIRECT-EXEC instead. Uses word boundary matching to prevent substring false
+positives.
 
 ### Indirect Execution (SA-INDIRECT-EXEC)
 Detects variables holding dangerous command names (`bash`, `curl`, `python`, etc.) used in execution position (after `|`, at line start, after `;`/`&&`/`||`).
@@ -32,7 +40,10 @@ not mask later heredocs, and escaped or mixed-quote delimiters undergo the same
 quote removal as Bash before matching their terminator.
 
 ### Binary Download Heuristic (SA-BINARY-DOWNLOAD-NOCOMPILE)
-Flags when a PKGBUILD downloads a file (`curl -o`/`wget -O`) and `chmod +x` it without any build commands (`make`, `cmake`, `cargo`, `gcc`, etc.).
+Flags when a PKGBUILD downloads a file (`curl -o`/`wget -O`) and `chmod +x` it
+without any active build commands (`make`, `cmake`, `cargo`, `gcc`, etc.).
+Build-tool names in comments, quoted data, inert heredocs, and arguments to
+unrelated commands do not suppress the signal.
 
 ## Signals emitted
 
@@ -52,7 +63,8 @@ All signals use `SignalCategory::Pkgbuild` (weight 0.45). Install script signals
 
 ## Design decisions
 
-- **Single-pass variable resolution** — no recursive expansion (prevents infinite loops, catches common patterns)
+- **Ordered single-pass variable resolution** — no recursive expansion; each
+  assignment affects only later textual uses
 - **PKGBUILD standard vars excluded** — prevents false positives on `$pkgname`, `$pkgver`, etc.
 - **No overlap with regex feature** — only emits signals when obfuscation hides the pattern from literal matching
 - **All regexes via `LazyLock`** — compiled once, zero per-invocation overhead

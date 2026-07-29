@@ -31,6 +31,14 @@
   plus checksum, comment, heredoc, and wallet-address false positives.
 - **Shell bypasses**: reconstruct quoted command words such as `cu""rl | ba''sh`
   with wrapper, heredoc, and redirection-aware parsing instead of raw-text guesses.
+- **Gate parser bypasses**: preserve textual variable-assignment order, inspect
+  repeated and architecture-specific source arrays, require active compilation
+  commands before suppressing binary-download findings, and include inert-looking
+  helpers executed through process substitutions or code-loading interpreter
+  options.
+- **Terminal-safe evidence**: visibly escape attacker-controlled control and
+  bidirectional formatting characters in human-readable scan output while
+  preserving structured JSON data.
 
 ### Added
 - **Built-artifact inspection**: add a bounded, non-extracting

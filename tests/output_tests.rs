@@ -242,6 +242,38 @@ fn verbose_without_matched_line_shows_nothing_extra() {
     assert_eq!(verbose_out, normal_out);
 }
 
+#[test]
+fn text_output_visibly_escapes_terminal_controls_and_bidi() {
+    let result = ScanResult {
+        package: "pkg\u{1b}]0;forged\u{7}".to_string(),
+        score: 15,
+        tier: Tier::Malicious,
+        signals: vec![make_signal_with_line(
+            "P-\u{202e}FORGED",
+            SignalCategory::Pkgbuild,
+            90,
+            "description\u{9b}2J",
+            true,
+            "curl | bash\u{1b}]52;c;payload\u{7}",
+        )],
+        override_gate_fired: Some("P-\u{202e}FORGED".to_string()),
+    };
+
+    let out = render(&result, true);
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+    assert!(!out.contains('\u{7}'), "{out:?}");
+    assert!(!out.contains('\u{9b}'), "{out:?}");
+    assert!(!out.contains('\u{202e}'), "{out:?}");
+    assert!(out.contains(r"\x1b]0;forged\x07"), "{out:?}");
+    assert!(out.contains(r"P-\u{202e}FORGED"), "{out:?}");
+    assert!(out.contains(r"description\x9b2J"), "{out:?}");
+    assert!(out.contains(r"curl | bash\x1b]52;c;payload\x07"), "{out:?}");
+
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(json.contains(r"\u001b"), "{json:?}");
+    assert!(json.contains('\u{202e}'), "{json:?}");
+}
+
 // ---------- Signal prefix severity levels ----------
 
 #[test]

