@@ -1028,7 +1028,7 @@ pub fn strip_comments(content: &str) -> String {
                     break;
                 }
                 c if c.is_whitespace() => at_word_start = true,
-                ';' | '|' | '&' | '(' | ')' | '{' | '}' => at_word_start = true,
+                ';' | '|' | '&' | '(' | ')' => at_word_start = true,
                 _ => at_word_start = false,
             }
         }
@@ -1228,6 +1228,16 @@ mod tests {
         assert_eq!(
             strip_comments(input),
             "echo \"documentation # still quoted\ncontinued\"; npm install js-digest \n"
+        );
+    }
+
+    #[test]
+    fn parameter_length_hash_is_not_treated_as_a_comment() {
+        let input =
+            "value=${#value}; python -c 'print(1)'\n{ # real comment\nfoo{#literal-word\n";
+        assert_eq!(
+            strip_comments(input),
+            "value=${#value}; python -c 'print(1)'\n{ \nfoo{#literal-word\n"
         );
     }
 }

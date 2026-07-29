@@ -57,6 +57,7 @@ struct ShellWord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ShellToken {
     Word(ShellWord),
+    InputRedirection(ShellWord),
     Boundary,
     LeftParen,
     RightParen,
@@ -65,6 +66,7 @@ enum ShellToken {
 #[derive(Debug, PartialEq, Eq)]
 struct ShellCommand {
     words: Vec<ShellWord>,
+    input_files: Vec<ShellWord>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -417,6 +419,7 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
     let mut index = 0usize;
     let mut expected_heredoc = None;
     let mut discard_redirection_target = false;
+    let mut input_redirection_target = false;
     let mut pending_heredocs: Vec<(String, bool)> = Vec::new();
     let mut parameter_brace_depth = 0usize;
     let mut arithmetic_paren_depth = None;
@@ -427,6 +430,7 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                        has_expansion: &mut bool,
                        expected_heredoc: &mut Option<bool>,
                        discard_redirection_target: &mut bool,
+                       input_redirection_target: &mut bool,
                        pending_heredocs: &mut Vec<(String, bool)>,
                        word_line: usize|
      -> Result<(), String> {
@@ -448,6 +452,12 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
             // Redirection targets affect I/O, not the command's assignment or
             // argument positions. They must not turn assignment-only commands
             // into apparent commands or metadata-like data into assignments.
+        } else if std::mem::take(input_redirection_target) {
+            tokens.push(ShellToken::InputRedirection(ShellWord {
+                value,
+                line: word_line,
+                has_expansion: expanded,
+            }));
         } else {
             tokens.push(ShellToken::Word(ShellWord {
                 value,
@@ -563,6 +573,7 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                         &mut has_expansion,
                         &mut expected_heredoc,
                         &mut discard_redirection_target,
+                        &mut input_redirection_target,
                         &mut pending_heredocs,
                         word_line,
                     )?;
@@ -599,13 +610,14 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                     &mut has_expansion,
                     &mut expected_heredoc,
                     &mut discard_redirection_target,
+                    &mut input_redirection_target,
                     &mut pending_heredocs,
                     word_line,
                 )?;
                 if expected_heredoc.is_some() {
                     return Err(format!("missing heredoc delimiter on line {line}"));
                 }
-                if discard_redirection_target {
+                if discard_redirection_target || input_redirection_target {
                     return Err(format!("missing redirection target on line {line}"));
                 }
                 tokens.push(ShellToken::Boundary);
@@ -653,6 +665,7 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                     &mut has_expansion,
                     &mut expected_heredoc,
                     &mut discard_redirection_target,
+                    &mut input_redirection_target,
                     &mut pending_heredocs,
                     word_line,
                 )?;
@@ -665,6 +678,7 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                     &mut has_expansion,
                     &mut expected_heredoc,
                     &mut discard_redirection_target,
+                    &mut input_redirection_target,
                     &mut pending_heredocs,
                     word_line,
                 )?;
@@ -682,10 +696,11 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                     &mut has_expansion,
                     &mut expected_heredoc,
                     &mut discard_redirection_target,
+                    &mut input_redirection_target,
                     &mut pending_heredocs,
                     word_line,
                 )?;
-                if discard_redirection_target {
+                if discard_redirection_target || input_redirection_target {
                     return Err(format!("missing redirection target on line {line}"));
                 }
                 tokens.push(ShellToken::Boundary);
@@ -698,6 +713,7 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                     &mut has_expansion,
                     &mut expected_heredoc,
                     &mut discard_redirection_target,
+                    &mut input_redirection_target,
                     &mut pending_heredocs,
                     word_line,
                 )?;
@@ -718,10 +734,11 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                     &mut has_expansion,
                     &mut expected_heredoc,
                     &mut discard_redirection_target,
+                    &mut input_redirection_target,
                     &mut pending_heredocs,
                     word_line,
                 )?;
-                if discard_redirection_target {
+                if discard_redirection_target || input_redirection_target {
                     return Err(format!(
                         "cannot statically parse nested process substitution on line {line}"
                     ));
@@ -731,13 +748,15 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                 index += 1;
             }
             '<' | '>' => {
-                if word_started
+                let explicit_fd = if word_started
                     && !word.is_empty()
                     && word.bytes().all(|byte| byte.is_ascii_digit())
                 {
+                    let fd = word.parse::<u8>().ok();
                     word.clear();
                     word_started = false;
                     has_expansion = false;
+                    fd
                 } else {
                     finish_word(
                         &mut tokens,
@@ -746,11 +765,22 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                         &mut has_expansion,
                         &mut expected_heredoc,
                         &mut discard_redirection_target,
+                        &mut input_redirection_target,
                         &mut pending_heredocs,
                         word_line,
                     )?;
+                    None
+                };
+                let fd = explicit_fd.unwrap_or(if character == '<' { 0 } else { 1 });
+                let next = chars.get(index + 1).copied();
+                let reads_file = character == '<'
+                    && fd == 0
+                    && !matches!(next, Some('<' | '&' | '|'));
+                if reads_file {
+                    input_redirection_target = true;
+                } else {
+                    discard_redirection_target = true;
                 }
-                discard_redirection_target = true;
                 if chars
                     .get(index + 1)
                     .is_some_and(|next| matches!(next, '<' | '>' | '&' | '|'))
@@ -789,10 +819,11 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
         &mut has_expansion,
         &mut expected_heredoc,
         &mut discard_redirection_target,
+        &mut input_redirection_target,
         &mut pending_heredocs,
         word_line,
     )?;
-    if discard_redirection_target {
+    if discard_redirection_target || input_redirection_target {
         return Err("missing redirection target at end of PKGBUILD".to_string());
     }
     if expected_heredoc.is_some() || !pending_heredocs.is_empty() {
@@ -807,13 +838,17 @@ fn parse_shell_program(content: &str) -> Result<ShellProgram, String> {
     let mut commands = Vec::new();
     let mut arrays = Vec::new();
     let mut command_words = Vec::new();
+    let mut command_input_files = Vec::new();
     let mut index = 0usize;
 
-    let finish_command = |commands: &mut Vec<ShellCommand>, words: &mut Vec<ShellWord>| {
+    let finish_command = |commands: &mut Vec<ShellCommand>,
+                          words: &mut Vec<ShellWord>,
+                          input_files: &mut Vec<ShellWord>| {
         strip_shell_control_prefixes(words);
-        if !words.is_empty() {
+        if !words.is_empty() || !input_files.is_empty() {
             commands.push(ShellCommand {
                 words: std::mem::take(words),
+                input_files: std::mem::take(input_files),
             });
         }
     };
@@ -833,6 +868,7 @@ fn parse_shell_program(content: &str) -> Result<ShellProgram, String> {
                 while index < tokens.len() && depth > 0 {
                     match &tokens[index] {
                         ShellToken::Word(word) => words.push(word.clone()),
+                        ShellToken::InputRedirection(_) => nested_syntax = true,
                         ShellToken::LeftParen => {
                             depth += 1;
                             nested_syntax = true;
@@ -858,13 +894,22 @@ fn parse_shell_program(content: &str) -> Result<ShellProgram, String> {
                 continue;
             }
             ShellToken::Word(word) => command_words.push(word.clone()),
+            ShellToken::InputRedirection(word) => command_input_files.push(word.clone()),
             ShellToken::Boundary | ShellToken::LeftParen | ShellToken::RightParen => {
-                finish_command(&mut commands, &mut command_words);
+                finish_command(
+                    &mut commands,
+                    &mut command_words,
+                    &mut command_input_files,
+                );
             }
         }
         index += 1;
     }
-    finish_command(&mut commands, &mut command_words);
+    finish_command(
+        &mut commands,
+        &mut command_words,
+        &mut command_input_files,
+    );
 
     Ok(ShellProgram { commands, arrays })
 }
@@ -1069,23 +1114,28 @@ fn reject_recognizable_install_mutation(command: &ShellCommand) -> Result<(), St
         "printf" => {
             mutates_install = printf_option_mutates_install(arguments);
         }
-        "read" | "mapfile" | "readarray" | "unset" | "let" => {
+        "read" => mutates_install = read_mutates_install(arguments),
+        "mapfile" | "readarray" => mutates_install = mapfile_mutates_install(arguments),
+        "unset" | "let" => {
             mutates_install = arguments
                 .iter()
-                .any(|argument| is_install_target(&argument.value));
+                .filter(|argument| argument.value != "--" && !argument.value.starts_with('-'))
+                .any(mutation_target_is_install_or_dynamic);
         }
         "declare" | "typeset" | "local" | "export" | "readonly" => {
             mutates_install = arguments
                 .iter()
-                .any(|argument| is_install_target(&argument.value));
+                .filter(|argument| !argument.value.starts_with('-'))
+                .any(mutation_target_is_install_or_dynamic);
             let nameref = arguments.iter().any(|argument| {
                 argument.value == "-n"
                     || (argument.value.starts_with('-') && argument.value.contains('n'))
             });
             if nameref {
                 mutates_install |= arguments.iter().any(|argument| {
-                    scalar_assignment(&argument.value)
-                        .is_some_and(|(_, value, _)| value == "install")
+                    scalar_assignment(&argument.value).is_some_and(|(_, value, _)| {
+                        value == "install" || contains_dynamic_shell_text(value)
+                    })
                 });
             }
         }
@@ -1119,13 +1169,69 @@ fn printf_option_mutates_install(arguments: &[ShellWord]) -> bool {
     if first.value == "-v" {
         return arguments
             .get(1)
-            .is_some_and(|target| is_install_target(&target.value));
+            .is_some_and(mutation_target_is_install_or_dynamic);
     }
-    first
-        .value
-        .strip_prefix("-v")
-        .filter(|target| !target.is_empty())
-        .is_some_and(is_install_target)
+    let Some(target) = first.value.strip_prefix("-v").filter(|target| !target.is_empty()) else {
+        return false;
+    };
+    is_install_target(target) || contains_dynamic_shell_text(target)
+}
+
+fn read_mutates_install(arguments: &[ShellWord]) -> bool {
+    let mut index = 0usize;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument.value == "--" {
+            return arguments[index + 1..]
+                .iter()
+                .any(mutation_target_is_install_or_dynamic);
+        }
+        if argument.value == "-a" {
+            return arguments
+                .get(index + 1)
+                .is_some_and(mutation_target_is_install_or_dynamic);
+        }
+        if matches!(
+            argument.value.as_str(),
+            "-d" | "-i" | "-n" | "-N" | "-p" | "-t" | "-u"
+        ) {
+            index += 2;
+            continue;
+        }
+        if argument.value.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return arguments[index..]
+            .iter()
+            .any(mutation_target_is_install_or_dynamic);
+    }
+    false
+}
+
+fn mapfile_mutates_install(arguments: &[ShellWord]) -> bool {
+    let mut index = 0usize;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument.value == "--" {
+            return arguments
+                .get(index + 1)
+                .is_some_and(mutation_target_is_install_or_dynamic);
+        }
+        if matches!(
+            argument.value.as_str(),
+            "-n" | "-O" | "-s" | "-u" | "-C" | "-c"
+        ) {
+            index += 2;
+            continue;
+        }
+        if argument.value.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return mutation_target_is_install_or_dynamic(argument);
+    }
+    false
 }
 
 fn effective_command_index(words: &[ShellWord]) -> Option<usize> {
@@ -1172,6 +1278,19 @@ fn is_install_target(value: &str) -> bool {
         || value.starts_with("install=")
         || value.starts_with("install+=")
         || value.starts_with("install[")
+}
+
+fn mutation_target_is_install_or_dynamic(word: &ShellWord) -> bool {
+    let target = word
+        .value
+        .split_once("+=")
+        .or_else(|| word.value.split_once('='))
+        .map_or(word.value.as_str(), |(target, _)| target);
+    is_install_target(target) || contains_dynamic_shell_text(target)
+}
+
+fn contains_dynamic_shell_text(value: &str) -> bool {
+    value.contains('$') || value.contains('`')
 }
 
 fn recognizable_install_mutation_text(value: &str) -> bool {
@@ -1310,6 +1429,11 @@ fn discover_local_source_candidates(
         if is_script_interpreter(command_name) {
             for argument in interpreter_file_arguments(command_name, arguments) {
                 if let Some(path) = resolve_explicit_helper(&argument)? {
+                    add_local_source_candidate(&mut candidates, path, true, false);
+                }
+            }
+            for input_file in &command.input_files {
+                if let Some(path) = resolve_explicit_helper(input_file)? {
                     add_local_source_candidate(&mut candidates, path, true, false);
                 }
             }
@@ -2553,6 +2677,21 @@ package_demo_cli() { install="${pkgname}.install"; }
                 "cat <(bash payload.dat)",
                 "payload.dat",
             ),
+            (
+                "interpreter-stdin-redirection",
+                "bash < \"$srcdir/payload.dat\"",
+                "payload.dat",
+            ),
+            (
+                "interpreter-explicit-stdin-redirection",
+                "bash 0<payload.dat",
+                "payload.dat",
+            ),
+            (
+                "interpreter-read-write-stdin-redirection",
+                "bash <> payload.dat",
+                "payload.dat",
+            ),
         ] {
             let dir = TestDir::new(name);
             dir.write(
@@ -2597,6 +2736,11 @@ package_demo_cli() { install="${pkgname}.install"; }
             "unset -v install",
             "declare install=evil.install",
             "typeset -n target=install",
+            "_field=install; printf -v \"$_field\" %s evil.install",
+            "printf -v \"${unknown_target}\" %s evil.install",
+            "read -r \"$unknown_target\"",
+            "declare \"$unknown_target=evil.install\"",
+            "typeset -n target=\"$unknown_target\"",
             "eval 'install=evil.install'",
         ];
 
@@ -2606,6 +2750,46 @@ package_demo_cli() { install="${pkgname}.install"; }
                 error.contains("indirect install mutation"),
                 "{form}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn dynamic_option_values_and_literal_other_targets_are_not_install_mutations() {
+        let package_names = vec!["demo".to_string()];
+        for form in [
+            "printf -v other %s value",
+            "read -p \"$prompt\" result",
+            "mapfile -O \"$origin\" result < paths",
+            "declare other=$value",
+        ] {
+            let scripts = extract_install_scripts(form, "demo", &package_names, &[]).unwrap();
+            assert!(scripts.is_empty(), "{form}: {scripts:?}");
+        }
+    }
+
+    #[test]
+    fn interpreter_non_stdin_redirections_do_not_mark_inert_sources_executable() {
+        for (name, invocation) in [
+            ("interpreter-fd-three", "bash 3<payload.dat"),
+            ("interpreter-here-string", "bash <<< payload.dat"),
+            ("interpreter-output", "bash > payload.dat"),
+        ] {
+            let dir = TestDir::new(name);
+            dir.write(
+                "PKGBUILD",
+                &format!(
+                    "pkgname=demo\nsource=('payload.dat')\nprepare() {{ {invocation}; }}\n"
+                ),
+            );
+            dir.write(
+                ".SRCINFO",
+                "pkgbase = demo\n\tsource = payload.dat\n\npkgname = demo\n",
+            );
+            dir.write("payload.dat", "inert data\n");
+
+            let tree = load_build_tree(&dir.0, "demo").unwrap();
+
+            assert!(tree.local_source_paths.is_empty(), "{invocation}");
         }
     }
 

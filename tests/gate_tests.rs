@@ -507,6 +507,11 @@ fn gate_scans_inert_looking_helpers_loaded_as_code() {
             "cat <(bash payload.dat)",
             "payload.dat",
         ),
+        (
+            "stdin-redirection-helper",
+            "bash < \"$srcdir/payload.dat\"",
+            "payload.dat",
+        ),
     ] {
         let tree = TestTree::new(name);
         let pkgbase = format!("gate-{name}");
@@ -537,6 +542,27 @@ fn gate_scans_inert_looking_helpers_loaded_as_code() {
             stderr(&output)
         );
     }
+}
+
+#[test]
+fn gate_fails_closed_on_dynamic_install_mutation_targets() {
+    let tree = TestTree::new("dynamic-install-target");
+    write_package(
+        &tree,
+        "gate-dynamic-install-target",
+        &["gate-dynamic-install-target"],
+        "pkgname=gate-dynamic-install-target\npkgver=1\npkgrel=1\n_field=install\nprintf -v \"$_field\" %s evil.install\npackage() { :; }\n",
+    );
+
+    let output = run_with_pkgbase(&tree, "gate-dynamic-install-target");
+
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("indirect install mutation"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

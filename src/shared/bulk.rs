@@ -10,6 +10,12 @@ const RPC_MAX_URL_LENGTH: usize = 4000;
 pub const MAX_RETRIES: u32 = 3;
 pub const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
 
+#[derive(Debug)]
+pub struct BatchMetadata {
+    pub packages: HashMap<String, AurPackage>,
+    pub missing: Vec<String>,
+}
+
 fn metadata_chunks(names: &[String]) -> Result<Vec<Vec<&str>>, String> {
     let mut chunks = Vec::new();
     let mut current = Vec::new();
@@ -48,7 +54,7 @@ fn metadata_chunks(names: &[String]) -> Result<Vec<Vec<&str>>, String> {
 fn batch_fetch_metadata_with<F>(
     names: &[String],
     mut fetch: F,
-) -> Result<HashMap<String, AurPackage>, String>
+) -> Result<BatchMetadata, String>
 where
     F: FnMut(&[&str]) -> Result<Vec<AurPackage>, String>,
 {
@@ -65,16 +71,36 @@ where
                 chunk.len()
             )
         })?;
+        let requested: HashSet<&str> = chunk.iter().copied().collect();
         for pkg in packages {
-            map.insert(pkg.name.clone(), pkg);
+            if !requested.contains(pkg.name.as_str()) {
+                return Err(format!(
+                    "AUR RPC returned unexpected package {:?} for chunk {}/{}",
+                    pkg.name,
+                    index + 1,
+                    chunk_count
+                ));
+            }
+            let name = pkg.name.clone();
+            if map.insert(name.clone(), pkg).is_some() {
+                return Err(format!("AUR RPC returned duplicate package {name:?}"));
+            }
         }
     }
 
-    Ok(map)
+    let missing = names
+        .iter()
+        .filter(|name| !map.contains_key(name.as_str()))
+        .cloned()
+        .collect();
+    Ok(BatchMetadata {
+        packages: map,
+        missing,
+    })
 }
 
 /// Fetch AUR metadata for a batch of package names via the RPC API.
-pub fn batch_fetch_metadata(names: &[String]) -> Result<HashMap<String, AurPackage>, String> {
+pub fn batch_fetch_metadata(names: &[String]) -> Result<BatchMetadata, String> {
     batch_fetch_metadata_with(names, aur_rpc::fetch_packages_info)
 }
 
@@ -162,8 +188,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(chunk_sizes, vec![RPC_BATCH_SIZE, 1]);
-        assert_eq!(metadata.len(), names.len());
-        assert!(names.iter().all(|name| metadata.contains_key(name)));
+        assert_eq!(metadata.packages.len(), names.len());
+        assert!(metadata.missing.is_empty());
+        assert!(
+            names
+                .iter()
+                .all(|name| metadata.packages.contains_key(name))
+        );
     }
 
     #[test]
@@ -211,5 +242,35 @@ mod tests {
         let names = vec!["x".repeat(RPC_MAX_URL_LENGTH)];
         let error = metadata_chunks(&names).unwrap_err();
         assert!(error.contains("exceeds the AUR RPC URL length limit"));
+    }
+
+    #[test]
+    fn batch_fetch_reports_missing_names_in_request_order() {
+        let names = vec!["first".to_string(), "missing".to_string(), "last".to_string()];
+        let metadata = batch_fetch_metadata_with(&names, |chunk| {
+            Ok(chunk
+                .iter()
+                .filter(|name| **name != "missing")
+                .map(|name| package(name))
+                .collect())
+        })
+        .unwrap();
+
+        assert_eq!(metadata.missing, vec!["missing"]);
+        assert_eq!(metadata.packages.len(), 2);
+    }
+
+    #[test]
+    fn batch_fetch_rejects_unexpected_and_duplicate_rows() {
+        let names = vec!["expected".to_string()];
+        let unexpected =
+            batch_fetch_metadata_with(&names, |_| Ok(vec![package("unexpected")])).unwrap_err();
+        assert!(unexpected.contains("unexpected package"), "{unexpected}");
+
+        let duplicate = batch_fetch_metadata_with(&names, |_| {
+            Ok(vec![package("expected"), package("expected")])
+        })
+        .unwrap_err();
+        assert!(duplicate.contains("duplicate package"), "{duplicate}");
     }
 }

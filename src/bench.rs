@@ -73,13 +73,22 @@ pub fn run(count: usize, jobs: usize) -> i32 {
 
     eprintln!("  Batch-fetching package metadata ({} RPC calls)...",
         (names.len() + RPC_BATCH_SIZE - 1) / RPC_BATCH_SIZE);
-    let metadata = match batch_fetch_metadata(&names) {
+    let batch = match batch_fetch_metadata(&names) {
         Ok(metadata) => metadata,
         Err(e) => {
             eprintln!("Error: {e}");
             return 1;
         }
     };
+    if !batch.missing.is_empty() {
+        eprintln!(
+            "Error: AUR metadata response omitted {} requested package(s): {}",
+            batch.missing.len(),
+            batch.missing.join(", ")
+        );
+        return 1;
+    }
+    let metadata = batch.packages;
     eprintln!("  Got metadata for {} packages", metadata.len());
 
     let maintainer_packages = prefetch_maintainer_packages(&metadata);

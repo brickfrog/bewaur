@@ -97,6 +97,43 @@ fn hook_without_a_controlling_tty_still_reaches_a_fail_closed_decision() {
 
 #[cfg(unix)]
 #[test]
+fn hook_blocks_when_the_alpm_target_stream_is_not_valid_utf8() {
+    unsafe extern "C" {
+        fn setsid() -> i32;
+    }
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bewaur-hook"));
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        command.pre_exec(|| {
+            if setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"valid\ninvalid-\xff\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("failed to read ALPM target list"), "{stderr}");
+    assert!(stderr.contains("blocking transaction"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
 fn hook_without_a_tty_blocks_on_malformed_security_config() {
     unsafe extern "C" {
         fn setsid() -> i32;

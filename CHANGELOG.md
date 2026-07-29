@@ -39,6 +39,13 @@
 - **Terminal-safe evidence**: visibly escape attacker-controlled control and
   bidirectional formatting characters in human-readable scan output while
   preserving structured JSON data.
+- **Complete security inputs**: treat omitted AUR metadata and ALPM target-stream
+  read errors as blocking scan failures. Local-only transaction names now
+  require an explicit permanent allowance instead of being skipped implicitly.
+- **Remaining shell input gaps**: fail closed on dynamic targets of variable
+  mutation builtins, scan local files fed to interpreter stdin, preserve Bash
+  parameter-length expansions during comment stripping, and process nested
+  executable heredocs without recursive stack growth.
 
 ### Added
 - **Built-artifact inspection**: add a bounded, non-extracting

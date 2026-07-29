@@ -84,16 +84,30 @@ fn gate_decision(tier_counts: &[u32; 5], has_scan_errors: bool, interactive: boo
     }
 }
 
+fn read_targets(reader: impl BufRead) -> Result<Vec<String>, String> {
+    reader
+        .lines()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|lines| {
+            lines
+                .into_iter()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .collect()
+        })
+        .map_err(|error| format!("failed to read ALPM target list: {error}"))
+}
+
 fn main() {
     // Collect all package names from stdin (ALPM NeedsTargets)
     let stdin = io::stdin();
-    let packages: Vec<String> = stdin
-        .lock()
-        .lines()
-        .filter_map(|line| line.ok())
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+    let packages = match read_targets(stdin.lock()) {
+        Ok(packages) => packages,
+        Err(error) => {
+            eprintln!("bewaur: {error} — blocking transaction");
+            std::process::exit(1);
+        }
+    };
 
     if packages.is_empty() {
         return;
@@ -147,8 +161,9 @@ fn main() {
 
     // --- Phase 1: Collect results silently ---
 
-    // Batch-fetch AUR metadata to separate real AUR packages from local-only ones
-    let metadata = match bulk::batch_fetch_metadata(&aur_packages) {
+    // Batch-fetch metadata for every non-official target. Omissions remain
+    // explicit security decisions rather than silently becoming local-only packages.
+    let batch = match bulk::batch_fetch_metadata(&aur_packages) {
         Ok(metadata) => metadata,
         Err(e) => {
             let _ = writeln!(hook_io, "{}", format!("  error: {e}").red());
@@ -162,23 +177,14 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let not_found: Vec<&str> = aur_packages
-        .iter()
-        .filter(|n| !metadata.contains_key(n.as_str()))
-        .map(|n| n.as_str())
-        .collect();
-    if !not_found.is_empty() {
-        let _ = writeln!(
-            hook_io,
-            "  Skipping {} not on AUR: {}",
-            not_found.len(),
-            not_found.join(", ")
-        );
-    }
+    let metadata = batch.packages;
     // Exact-tree approvals apply only to the Paru pre-build gate. Resolve each
     // transaction package to its AUR package base before applying the explicit
-    // permanent allowance, so split-package outputs behave consistently.
-    let mut permanently_allowed_count: u32 = 0;
+    // permanent allowance, so split-package outputs behave consistently. If
+    // metadata is absent, only an allowance for the exact transaction name can
+    // authorize the otherwise unscanned package.
+    let (mut permanently_allowed_count, mut scan_errors) =
+        missing_metadata_decisions(&config, &batch.missing);
     let scan_packages: Vec<String> = aur_packages
         .into_iter()
         .filter(|name| {
@@ -201,7 +207,6 @@ fn main() {
     let maintainer_packages = bulk::prefetch_maintainer_packages(&metadata);
 
     let mut results: Vec<ScanResult> = Vec::new();
-    let mut scan_errors: Vec<(String, String)> = Vec::new();
     let mut tier_counts: [u32; 5] = [0, 0, 0, 0, 0]; // Trusted, Ok, Sketchy, Suspicious, Malicious
 
     for (i, pkg) in scan_packages.iter().enumerate() {
@@ -249,7 +254,7 @@ fn main() {
     // --- Phase 2: Output + decision ---
 
     // Case 1: All permanently allowed
-    if !any_scanned {
+    if !any_scanned && scan_errors.is_empty() {
         if permanently_allowed_count > 0 {
             let _ = writeln!(
                 hook_io,
@@ -391,6 +396,25 @@ fn transaction_has_permanent_allowance(
     package_base.is_some_and(|package_base| is_permanently_allowed_in(config, package_base))
 }
 
+fn missing_metadata_decisions(
+    config: &config::Config,
+    missing: &[String],
+) -> (u32, Vec<(String, String)>) {
+    let mut allowed = 0u32;
+    let mut errors = Vec::new();
+    for name in missing {
+        if is_permanently_allowed_in(config, name) {
+            allowed += 1;
+        } else {
+            errors.push((
+                name.clone(),
+                "AUR metadata response omitted this non-official transaction target".to_string(),
+            ));
+        }
+    }
+    (allowed, errors)
+}
+
 /// Get all package names from official sync databases in one call.
 /// Output format: "repo package_name version [installed]"
 fn official_repo_packages() -> HashSet<String> {
@@ -409,6 +433,7 @@ fn official_repo_packages() -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn noninteractive_flagged_results_block_instead_of_prompting() {
@@ -463,5 +488,28 @@ mod tests {
             Some("other-base")
         ));
         assert!(!transaction_has_permanent_allowance(&config, None));
+    }
+
+    #[test]
+    fn target_stream_errors_fail_closed_instead_of_dropping_packages() {
+        let error = read_targets(Cursor::new(b"valid\ninvalid-\xff\n")).unwrap_err();
+        assert!(error.contains("failed to read ALPM target list"), "{error}");
+    }
+
+    #[test]
+    fn missing_metadata_requires_an_exact_permanent_allowance() {
+        let mut config = config::Config::default();
+        config
+            .permanent_allow
+            .packages
+            .push("allowed-local".to_string());
+        let missing = vec!["blocked-local".to_string(), "allowed-local".to_string()];
+
+        let (allowed, errors) = missing_metadata_decisions(&config, &missing);
+
+        assert_eq!(allowed, 1);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, "blocked-local");
+        assert!(errors[0].1.contains("omitted"));
     }
 }

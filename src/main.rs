@@ -440,7 +440,7 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    let mut names = match get_installed_aur_packages() {
+    let names = match get_installed_aur_packages() {
         Ok(names) if names.is_empty() => {
             eprintln!("No AUR packages installed.");
             return 0;
@@ -456,28 +456,30 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
         "  Fetching package metadata for {} installed packages...",
         names.len()
     );
-    let metadata = match batch_fetch_metadata(&names) {
+    let batch = match batch_fetch_metadata(&names) {
         Ok(metadata) => metadata,
         Err(e) => {
             eprintln!("Error: {e}");
             return 1;
         }
     };
-    let not_found: Vec<&str> = names
-        .iter()
-        .filter(|n| !metadata.contains_key(n.as_str()))
-        .map(|n| n.as_str())
-        .collect();
-    if !not_found.is_empty() {
+    if !batch.missing.is_empty() {
         eprintln!(
-            "  Skipping {} not on AUR: {}",
-            not_found.len(),
-            not_found.join(", ")
+            "  error: AUR metadata response omitted {} installed foreign package(s): {}",
+            batch.missing.len(),
+            batch.missing.join(", ")
         );
-        names.retain(|n| metadata.contains_key(n.as_str()));
     }
+    let metadata = batch.packages;
+    let scan_names: Vec<&String> = names
+        .iter()
+        .filter(|name| metadata.contains_key(name.as_str()))
+        .collect();
     let total = names.len();
-    eprintln!("{}", format!("Scanning {} AUR packages...", total).bold());
+    eprintln!(
+        "{}",
+        format!("Scanning {} of {} foreign packages...", scan_names.len(), total).bold()
+    );
 
     let maintainer_packages = prefetch_maintainer_packages(&metadata);
 
@@ -497,25 +499,26 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
     );
 
     let tier_counts: [AtomicU64; 5] = std::array::from_fn(|_| AtomicU64::new(0));
-    let error_count = AtomicU64::new(0);
+    let error_count = AtomicU64::new(batch.missing.len() as u64);
     let flagged = std::sync::Mutex::new(Vec::<ScanResult>::new());
+    pb.inc(batch.missing.len() as u64);
 
     pool.install(|| {
-        names.par_iter().for_each(|name| {
-            let result = if let Some(meta) = metadata.get(name).cloned() {
-                let maint_pkgs = meta
-                    .maintainer
-                    .as_deref()
-                    .and_then(|m| maintainer_packages.get(m))
-                    .cloned()
-                    .unwrap_or_default();
+        scan_names.par_iter().for_each(|name| {
+            let meta = metadata
+                .get(name.as_str())
+                .expect("scan names are present in metadata")
+                .clone();
+            let maint_pkgs = meta
+                .maintainer
+                .as_deref()
+                .and_then(|m| maintainer_packages.get(m))
+                .cloned()
+                .unwrap_or_default();
 
-                match clone_with_retry(name, meta, maint_pkgs) {
-                    Ok(ctx) => Ok(coordinator::run_scan_context_with_config(&ctx, &config)),
-                    Err(e) => Err(e),
-                }
-            } else {
-                Err("not found on AUR".to_string())
+            let result = match clone_with_retry(name, meta, maint_pkgs) {
+                Ok(ctx) => Ok(coordinator::run_scan_context_with_config(&ctx, &config)),
+                Err(e) => Err(e),
             };
 
             match result {

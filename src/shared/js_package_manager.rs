@@ -945,7 +945,29 @@ fn shell_array_words(content: &str) -> Vec<String> {
     words
 }
 
+#[derive(Debug)]
+enum LogicalWork {
+    Line(String),
+    Content(String),
+}
+
 fn executable_logical_lines(content: &str) -> Vec<String> {
+    let mut logical_lines = Vec::new();
+    let mut work = vec![LogicalWork::Content(content.to_string())];
+    while let Some(item) = work.pop() {
+        match item {
+            LogicalWork::Line(line) => logical_lines.push(line),
+            LogicalWork::Content(content) => {
+                let mut nested = executable_logical_items(&content);
+                nested.reverse();
+                work.extend(nested);
+            }
+        }
+    }
+    logical_lines
+}
+
+fn executable_logical_items(content: &str) -> Vec<LogicalWork> {
     #[derive(Debug)]
     struct PendingHeredoc {
         delimiter: String,
@@ -954,7 +976,7 @@ fn executable_logical_lines(content: &str) -> Vec<String> {
         body: String,
     }
 
-    let mut logical_lines = Vec::new();
+    let mut logical_items = Vec::new();
     let mut pending = String::new();
     let mut pending_quote = None;
     let mut heredocs: VecDeque<PendingHeredoc> = VecDeque::new();
@@ -969,7 +991,7 @@ fn executable_logical_lines(content: &str) -> Vec<String> {
             if candidate == heredoc.delimiter {
                 let completed = heredocs.pop_front().expect("front heredoc exists");
                 if completed.execute && !completed.body.trim().is_empty() {
-                    logical_lines.extend(executable_logical_lines(&completed.body));
+                    logical_items.push(LogicalWork::Content(completed.body));
                 }
             } else if heredoc.execute {
                 heredoc.body.push_str(candidate);
@@ -1006,14 +1028,14 @@ fn executable_logical_lines(content: &str) -> Vec<String> {
                     body: String::new(),
                 }),
         );
-        logical_lines.push(line);
+        logical_items.push(LogicalWork::Line(line));
     }
 
     if !pending.trim().is_empty() {
-        logical_lines.push(pending);
+        logical_items.push(LogicalWork::Line(pending));
     }
 
-    logical_lines
+    logical_items
 }
 
 fn quote_after_line(line: &str, mut quote: Option<char>) -> Option<char> {
@@ -1628,6 +1650,24 @@ bun add js-digest
         let inert = analyze("cat <<EOF\nbun add js-digest\nEOF");
         assert!(inert.named_installs.is_empty());
         assert!(inert.known_june_iocs.is_empty());
+    }
+
+    #[test]
+    fn deeply_nested_executable_heredocs_are_processed_without_recursion() {
+        let depth = 256usize;
+        let mut content = String::new();
+        for index in 0..depth {
+            content.push_str(&format!("bash <<'EOF{index}'\n"));
+        }
+        content.push_str("bun add js-digest\n");
+        for index in (0..depth).rev() {
+            content.push_str(&format!("EOF{index}\n"));
+        }
+
+        let result = analyze(&content);
+
+        assert_eq!(result.known_june_iocs.len(), 1);
+        assert_eq!(result.known_june_iocs[0].package, "js-digest");
     }
 
     #[test]

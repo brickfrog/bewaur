@@ -37,3 +37,5 @@ through the shared active-shell parser; the remaining rules are in the
 ## Performance
 
 Patterns are compiled once via `OnceLock` and reused across invocations.
+Shared comment stripping preserves Bash parameter expansions such as `${#value}`
+so a length expression cannot hide executable install code later on the line.
