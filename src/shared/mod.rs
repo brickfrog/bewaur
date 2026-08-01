@@ -1,5 +1,6 @@
 pub mod aur_comments;
 pub mod aur_git;
+pub mod aur_identity;
 pub mod aur_rpc;
 pub mod bulk;
 pub mod cache;

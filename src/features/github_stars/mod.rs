@@ -19,6 +19,7 @@ impl Feature for GitHubStars {
                     .metadata
                     .as_ref()
                     .and_then(|m| m.url.clone()),
+                min_tier: None,
             });
             return signals;
         }
@@ -32,6 +33,7 @@ impl Feature for GitHubStars {
                     description: "Upstream GitHub repo has 0 stars".to_string(),
                     is_override_gate: false,
                     matched_line: None,
+                    min_tier: None,
                 });
             } else if stars < 10 {
                 signals.push(Signal {
@@ -41,6 +43,7 @@ impl Feature for GitHubStars {
                     description: format!("Upstream GitHub repo has very few stars ({stars})"),
                     is_override_gate: false,
                     matched_line: None,
+                    min_tier: None,
                 });
             }
         }

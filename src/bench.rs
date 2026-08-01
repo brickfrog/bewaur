@@ -195,7 +195,7 @@ pub fn run(count: usize, jobs: usize) -> i32 {
     // Print detailed output for HIGH/CRITICAL/MALICIOUS packages
     let mut flagged = flagged.into_inner().unwrap();
     if !flagged.is_empty() {
-        flagged.sort_by(|a, b| a.score.cmp(&b.score));
+        flagged.sort_by(|a, b| b.tier.cmp(&a.tier).then(a.score.cmp(&b.score)));
         println!();
         println!("{}", format!("=== {} flagged packages (SKETCHY+) ===", flagged.len()).bold());
         for result in &flagged {

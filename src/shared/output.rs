@@ -39,6 +39,26 @@ pub fn write_text(w: &mut dyn Write, result: &ScanResult, verbose: bool) {
         );
     }
 
+    if let Some(ref floor) = result.tier_floor {
+        let signal = terminal_safe(&floor.signal);
+        // The floor signal can be absent when the user ignored it: ignoring
+        // suppresses points for display but never the tier decision itself.
+        let suppressed = !result.signals.iter().any(|s| s.id == floor.signal);
+        let note = if suppressed {
+            " (signal suppressed by config)"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            w,
+            "  {} Capped at {} by {}{}",
+            " !".yellow(),
+            floor.tier,
+            signal.as_ref(),
+            note
+        );
+    }
+
     if result.signals.is_empty() {
         let _ = writeln!(w, "  No negative signals found.");
     } else {

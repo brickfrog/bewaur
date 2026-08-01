@@ -1,5 +1,5 @@
 use crate::shared::patterns::PatternDatabase;
-use crate::shared::scoring::SignalCategory;
+use crate::shared::scoring::{SignalCategory, TierFloor};
 
 /// A signal definition (metadata only, no compiled regex).
 pub struct SignalDef {
@@ -10,6 +10,23 @@ pub struct SignalDef {
     pub description: String,
     #[allow(dead_code)]
     pub is_override_gate: bool,
+    /// Tier floor this signal carries, if any. Unlike `points`, this is
+    /// drift-checked against the emitting feature — see the tests below.
+    #[allow(dead_code)]
+    pub min_tier: Option<TierFloor>,
+}
+
+/// Signals that clamp the reported tier.
+///
+/// Kept as a single lookup rather than a column on the tuple table below,
+/// because only a handful of signals carry a floor and a mostly-`None` column
+/// across ~60 rows obscures the ones that matter. `registry_floors_match_the_
+/// emitting_feature` enforces agreement with the construction site.
+fn floor_for(id: &str) -> Option<TierFloor> {
+    match id {
+        "B-ORPHAN-TAKEOVER" | "B-UNPROVEN-ADOPTION" => Some(TierFloor::Ok),
+        _ => None,
+    }
 }
 
 /// Return all known signal definitions (pattern-based + hardcoded).
@@ -39,6 +56,7 @@ fn pattern_signals() -> Vec<SignalDef> {
                 points: rule.points,
                 description: rule.description.clone(),
                 is_override_gate: rule.override_gate,
+                min_tier: floor_for(&rule.id),
             });
         }
     }
@@ -68,6 +86,7 @@ fn hardcoded_signals() -> Vec<SignalDef> {
         // orphan_takeover_analysis
         ("B-SUBMITTER-CHANGED", Behavioral, 15, "Package maintainer differs from original submitter", false),
         ("B-ORPHAN-TAKEOVER", Behavioral, 50, "Adopted package with new git author (orphan takeover pattern)", false),
+        ("B-UNPROVEN-ADOPTION", Behavioral, 0, "Adopted package with no community validation or an adopting maintainer with no track record (tier floor only)", false),
         // bin_source_verification
         ("B-BIN-GITHUB-ORG-MISMATCH", Behavioral, 50, "-bin package source downloads from different GitHub org than upstream", false),
         ("B-BIN-DOMAIN-MISMATCH", Behavioral, 30, "-bin package source downloads from different domain than upstream", false),
@@ -122,6 +141,7 @@ fn hardcoded_signals() -> Vec<SignalDef> {
             points: pts,
             description: desc.to_string(),
             is_override_gate: gate,
+            min_tier: floor_for(id),
         })
         .collect()
 }
@@ -157,6 +177,86 @@ mod tests {
         assert!(defs.iter().any(|d| d.id == "SA-VAR-CONCAT-EXEC"));
         // Reasonable total count (239 patterns + 32 hardcoded)
         assert!(defs.len() > 250, "Expected 250+ signals, got {}", defs.len());
+    }
+
+    #[test]
+    fn registry_floors_are_the_expected_set() {
+        // Adding a floor anywhere fails this until it is registered here.
+        let defs = all_signal_definitions();
+        let mut floored: Vec<(&str, Option<TierFloor>)> = defs
+            .iter()
+            .filter(|d| d.min_tier.is_some())
+            .map(|d| (d.id.as_str(), d.min_tier))
+            .collect();
+        floored.sort_unstable_by_key(|(id, _)| *id);
+        assert_eq!(
+            floored,
+            vec![
+                ("B-ORPHAN-TAKEOVER", Some(TierFloor::Ok)),
+                ("B-UNPROVEN-ADOPTION", Some(TierFloor::Ok)),
+            ]
+        );
+    }
+
+    #[test]
+    fn registry_floors_match_the_emitting_feature() {
+        use crate::features::Feature;
+        use crate::features::orphan_takeover_analysis::OrphanTakeoverAnalysis;
+        use crate::shared::models::{AurPackage, GitCommit, PackageContext};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ctx = PackageContext {
+            name: "pkg".into(),
+            metadata: Some(AurPackage {
+                name: "pkg".into(),
+                package_base: None,
+                url: None,
+                num_votes: 10,
+                popularity: 1.0,
+                out_of_date: None,
+                maintainer: Some("attacker".into()),
+                submitter: Some("original".into()),
+                first_submitted: now - 365 * 86400,
+                last_modified: now,
+                license: None,
+            }),
+            pkgbuild_content: None,
+            install_script_content: None,
+            prior_pkgbuild_content: None,
+            git_log: vec![
+                GitCommit {
+                    author: "attacker".into(),
+                    timestamp: now - 3600,
+                    diff: None,
+                },
+                GitCommit {
+                    author: "original".into(),
+                    timestamp: now - 180 * 86400,
+                    diff: None,
+                },
+            ],
+            maintainer_packages: vec![],
+            github_stars: None,
+            github_not_found: false,
+            aur_comments: vec![],
+        };
+
+        let defs = all_signal_definitions();
+        for signal in OrphanTakeoverAnalysis.analyze(&ctx) {
+            let def = defs
+                .iter()
+                .find(|d| d.id == signal.id)
+                .unwrap_or_else(|| panic!("{} is not registered", signal.id));
+            assert_eq!(
+                signal.min_tier, def.min_tier,
+                "{} floor drifted from the registry",
+                signal.id
+            );
+        }
     }
 
     #[test]

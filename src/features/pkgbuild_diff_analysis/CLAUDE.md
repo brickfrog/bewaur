@@ -27,6 +27,11 @@ A historical submitter/maintainer difference, stale update, ordinary named
 install, or newly added package-manager dependency alone must never fire the
 override gate.
 
+That invariant covers override gates only. A *tier floor* (`Signal.min_tier`) is
+a distinct, weaker mechanism: it can raise the reported tier but never reach
+MALICIOUS, so attaching a floor to a signal here would not violate the rule
+above. No signal in this feature currently carries one.
+
 The shared command scanner never runs package code. It ignores arrays, shell
 comments, quoted prose, inert heredoc bodies, bare installs, local/path
 dependency forms, and ambiguous unknown options. It does analyze script text

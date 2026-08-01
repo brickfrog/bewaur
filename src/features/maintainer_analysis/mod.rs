@@ -33,6 +33,7 @@ impl Feature for MaintainerAnalysis {
                     ),
                     is_override_gate: false,
                     matched_line: None,
+                    min_tier: None,
                 });
             } else {
                 signals.push(Signal {
@@ -42,6 +43,7 @@ impl Feature for MaintainerAnalysis {
                     description: "Maintainer has only 1 package".to_string(),
                     is_override_gate: false,
                     matched_line: None,
+                    min_tier: None,
                 });
             }
         }
@@ -63,6 +65,7 @@ impl Feature for MaintainerAnalysis {
                 ),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 

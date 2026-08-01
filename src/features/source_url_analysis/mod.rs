@@ -47,6 +47,7 @@ impl Feature for SourceUrlAnalysis {
                     description: pat.description.clone(),
                     is_override_gate: pat.override_gate,
                     matched_line,
+                    min_tier: None,
                 });
             }
         }

@@ -553,7 +553,7 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
     let scanned = total - errors;
 
     if json {
-        flagged.sort_by(|a, b| a.score.cmp(&b.score));
+        flagged.sort_by(|a, b| b.tier.cmp(&a.tier).then(a.score.cmp(&b.score)));
         let json_str = serde_json::to_string_pretty(&flagged).expect("Failed to serialize");
         println!("{json_str}");
     } else {
@@ -570,7 +570,7 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
         );
 
         if !flagged.is_empty() {
-            flagged.sort_by(|a, b| a.score.cmp(&b.score));
+            flagged.sort_by(|a, b| b.tier.cmp(&a.tier).then(a.score.cmp(&b.score)));
             println!();
             println!(
                 "{}",

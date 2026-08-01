@@ -132,6 +132,7 @@ impl Feature for NameAnalysis {
                         ),
                         is_override_gate: false,
                         matched_line: None,
+                        min_tier: None,
                     });
                     // Only fire once per package
                     return signals;
@@ -155,6 +156,7 @@ impl Feature for NameAnalysis {
                     ),
                     is_override_gate: false,
                     matched_line: None,
+                    min_tier: None,
                 });
                 break;
             }
@@ -177,6 +179,7 @@ impl Feature for NameAnalysis {
                     ),
                     is_override_gate: false,
                     matched_line: None,
+                    min_tier: None,
                 });
                 break;
             }

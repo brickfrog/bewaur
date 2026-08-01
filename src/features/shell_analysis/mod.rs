@@ -215,6 +215,7 @@ fn analyze_obfuscated_download_execute(content: &str) -> Vec<Signal> {
             .lines()
             .nth(finding.line.saturating_sub(1))
             .map(|line| line.trim().to_string()),
+        min_tier: None,
     }]
 }
 
@@ -383,6 +384,7 @@ fn analyze_variable_segment(
                     ),
                     is_override_gate: true,
                     matched_line: Some(display_line.trim().to_string()),
+                    min_tier: None,
                 });
                 *found_exec = true;
             }
@@ -402,6 +404,7 @@ fn analyze_variable_segment(
                 ),
                 is_override_gate: false,
                 matched_line: Some(display_line.trim().to_string()),
+                min_tier: None,
             });
             *found_cmd = true;
         }
@@ -436,6 +439,7 @@ fn analyze_variable_segment(
                 ),
                 is_override_gate: false,
                 matched_line: Some(display_line.trim().to_string()),
+                min_tier: None,
             });
             *found_indirect = true;
             break;
@@ -461,6 +465,7 @@ fn analyze_charbychar_construction(content: &str) -> Vec<Signal> {
                 ),
                 is_override_gate: false,
                 matched_line: Some(line.trim().to_string()),
+                min_tier: None,
             }];
         }
     }
@@ -500,6 +505,7 @@ fn analyze_data_blobs(content: &str) -> Vec<Signal> {
                 description: "embedded long hex string (possible encoded payload)".to_string(),
                 is_override_gate: false,
                 matched_line: Some(line.trim().to_string()),
+                min_tier: None,
             });
         }
 
@@ -519,6 +525,7 @@ fn analyze_data_blobs(content: &str) -> Vec<Signal> {
                         .to_string(),
                     is_override_gate: false,
                     matched_line: Some(line.trim().to_string()),
+                    min_tier: None,
                 });
             }
         }
@@ -572,6 +579,7 @@ fn analyze_heredoc_entropy(content: &str) -> Vec<Signal> {
                         ),
                         is_override_gate: false,
                         matched_line: Some(start_line.trim().to_string()),
+                        min_tier: None,
                     }];
                 }
             }
@@ -658,6 +666,7 @@ fn analyze_binary_download(content: &str) -> Vec<Signal> {
         description: "downloads file and chmod +x with no compilation step".to_string(),
         is_override_gate: false,
         matched_line,
+        min_tier: None,
     }]
 }
 

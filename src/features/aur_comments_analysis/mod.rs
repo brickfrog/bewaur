@@ -53,6 +53,7 @@ impl Feature for AurCommentsAnalysis {
                         ),
                         is_override_gate: false,
                         matched_line: Some(preview(comment, 120)),
+                        min_tier: None,
                     }];
                 }
             }

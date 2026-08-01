@@ -212,10 +212,13 @@ pub fn scan_install_script_with_config(
     }
     let mut seen = HashSet::new();
     signals.retain(|signal| seen.insert(signal.id.clone()));
+    // See `run_analysis_inputs_with_config`: hard findings are collected from
+    // the unfiltered set so suppression cannot disable a gate or floor.
+    let hard = scoring::hard_findings(&signals);
     signals.retain(|signal| {
         !crate::shared::config::is_signal_ignored(config, &signal.id, &signal.category)
     });
-    scoring::compute_score(package_name, &signals)
+    scoring::compute_score_with(package_name, &signals, hard)
 }
 
 fn local_build_context(
@@ -302,12 +305,18 @@ fn run_analysis_inputs_with_config(
         all_signals.retain(|signal| seen.insert(signal.id.clone()));
     }
 
+    // Collect override gates and tier floors BEFORE suppression. Ignoring a
+    // signal removes its points and hides its row; it must never disable a
+    // detection, or one `ignore --category Behavioral` would silently defeat
+    // every override gate.
+    let hard = scoring::hard_findings(&all_signals);
+
     if !config.ignored.signals.is_empty() || !config.ignored.categories.is_empty() {
         all_signals
             .retain(|s| !crate::shared::config::is_signal_ignored(config, &s.id, &s.category));
     }
 
-    scoring::compute_score(&ctx.name, &all_signals)
+    scoring::compute_score_with(&ctx.name, &all_signals, hard)
 }
 
 #[cfg(test)]

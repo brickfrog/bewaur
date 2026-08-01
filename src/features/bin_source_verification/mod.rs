@@ -81,6 +81,7 @@ impl Feature for BinSourceVerification {
                             ),
                             is_override_gate: false,
                             matched_line: Some(raw_url.clone()),
+                            min_tier: None,
                         });
                     }
                 }
@@ -98,6 +99,7 @@ impl Feature for BinSourceVerification {
                     ),
                     is_override_gate: false,
                     matched_line: Some(raw_url.clone()),
+                    min_tier: None,
                 });
             }
         }

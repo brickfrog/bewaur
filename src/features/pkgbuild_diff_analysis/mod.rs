@@ -1,4 +1,5 @@
 use crate::features::Feature;
+use crate::shared::aur_identity::identity_key;
 use crate::shared::js_package_manager;
 use crate::shared::models::PackageContext;
 use crate::shared::patterns;
@@ -76,6 +77,7 @@ fn check_new_js_package_manager_behavior(
             ),
             is_override_gate: false,
             matched_line: find_line_with_any(new, &added_dependencies),
+            min_tier: None,
         });
     }
 
@@ -109,6 +111,7 @@ fn check_new_js_package_manager_behavior(
             ),
             is_override_gate: false,
             matched_line: Some(first_install.matched_line.clone()),
+            min_tier: None,
         });
     }
 
@@ -138,6 +141,7 @@ fn check_new_js_package_manager_behavior(
             ),
             is_override_gate: false,
             matched_line: Some(first_ioc.matched_line.clone()),
+            min_tier: None,
         });
     }
 
@@ -156,6 +160,7 @@ fn check_new_js_package_manager_behavior(
             ),
             is_override_gate: false,
             matched_line: Some(first_install.matched_line.clone()),
+            min_tier: None,
         });
     }
 
@@ -172,6 +177,7 @@ fn check_new_js_package_manager_behavior(
             ),
             is_override_gate: true,
             matched_line: Some(first_ioc.matched_line.clone()),
+            min_tier: None,
         });
     }
 }
@@ -240,14 +246,6 @@ fn recent_takeover_evidence(ctx: &PackageContext) -> Option<RecentTakeoverEviden
     })
 }
 
-fn identity_key(identity: &str) -> String {
-    identity
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
 fn find_line_with_any(content: &str, needles: &[String]) -> Option<String> {
     content
         .lines()
@@ -276,6 +274,7 @@ fn check_new_suspicious(new: &str, old: &str, signals: &mut Vec<Signal>) {
                 ),
                 is_override_gate: false,
                 matched_line,
+                min_tier: None,
             });
             return; // one signal is enough
         }
@@ -295,6 +294,7 @@ fn check_checksum_removed(new: &str, old: &str, signals: &mut Vec<Signal>) {
             description: "Checksum array removed in latest update".to_string(),
             is_override_gate: false,
             matched_line: None,
+            min_tier: None,
         });
         return;
     }
@@ -311,6 +311,7 @@ fn check_checksum_removed(new: &str, old: &str, signals: &mut Vec<Signal>) {
                 description: "All checksums changed to SKIP in latest update".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
     }
@@ -367,6 +368,7 @@ fn check_source_domain_changed(new: &str, old: &str, signals: &mut Vec<Signal>) 
             ),
             is_override_gate: false,
             matched_line: None,
+            min_tier: None,
         });
     }
 }
@@ -419,6 +421,7 @@ fn check_major_rewrite(new: &str, old: &str, signals: &mut Vec<Signal>) {
             ),
             is_override_gate: false,
             matched_line: None,
+            min_tier: None,
         });
     }
 }

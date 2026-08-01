@@ -37,6 +37,7 @@ impl Feature for GitHistoryAnalysis {
                 description: "Git history has only 1 commit".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -59,6 +60,7 @@ impl Feature for GitHistoryAnalysis {
                         description: format!("Package is very new ({age_days} days old)"),
                         is_override_gate: false,
                         matched_line: None,
+                        min_tier: None,
                     });
                 }
             }
@@ -84,6 +86,7 @@ impl Feature for GitHistoryAnalysis {
                                     .to_string(),
                             is_override_gate: false,
                             matched_line: None,
+                            min_tier: None,
                         });
                     }
                 }
@@ -102,6 +105,7 @@ impl Feature for GitHistoryAnalysis {
                     description: "Git history shows multiple different authors".to_string(),
                     is_override_gate: false,
                     matched_line: None,
+                    min_tier: None,
                 });
             }
         }

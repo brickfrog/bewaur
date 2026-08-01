@@ -42,6 +42,7 @@ impl Feature for ChecksumAnalysis {
                 description: "No checksum array found in PKGBUILD".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -54,6 +55,7 @@ impl Feature for ChecksumAnalysis {
                 description: "All checksums are SKIP (no integrity verification)".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -67,6 +69,7 @@ impl Feature for ChecksumAnalysis {
                     .to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -88,6 +91,7 @@ impl Feature for ChecksumAnalysis {
                             ),
                             is_override_gate: false,
                             matched_line: None,
+                            min_tier: None,
                         });
                         break 'outer;
                     }

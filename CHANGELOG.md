@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added
+- **Tier floors**: a signal can now declare the least-severe tier it will permit
+  (`Signal.min_tier`). A floor only ever raises severity and cannot reach
+  MALICIOUS, which stays exclusive to the 47 vetted override gates. This exists
+  because each category is capped at 100 before weighting, so behavioral signals
+  alone contribute at most `0.25 * 100 = 25` risk and can never leave the
+  TRUSTED band on score alone. Scan output explains the divergence with a
+  `Capped at <tier> by <signal>` line; the trust score itself is left untouched.
+- **`B-UNPROVEN-ADOPTION`** (Behavioral, 0 points, `Ok` floor): an adopted
+  package that also has fewer than 5 votes or an adopting maintainer who owns
+  exactly one package can no longer be reported as TRUSTED. It scores zero
+  points deliberately — both corroborators are already counted by
+  `M-VOTES-LOW`/`M-VOTES-ZERO` and `B-MAINTAINER-SINGLE`/`B-MAINTAINER-NEW`, so
+  its only effect is withholding TRUSTED; it can never push a package into a
+  tier that prompts or blocks. This covers the July 2026 incident packages that
+  rated TRUSTED (`i915-sriov-dkms` 93, `warp-terminal-git` 89, `astro-box` 82),
+  whose trees had already been reverted so no author change remained visible.
+  `B-ORPHAN-TAKEOVER` also carries an `Ok` floor as a backstop, though
+  `T-AUTHOR-CHANGE` co-fires with it and already lands that case at trust 80.
+
+### Fixed
+- **`ignore` could disable detections**: override gates were evaluated *after*
+  the coordinator dropped user-ignored signals, so a single `bewaur ignore
+  --category Behavioral` silently disabled override gates including
+  `B-RECENT-TAKEOVER-JUNE-2026-IOC`. Gates and tier floors are now collected
+  from the unfiltered signal set. Ignoring still suppresses a signal's points
+  and its report row, but is no longer a detection kill switch; output marks a
+  floor whose signal was hidden as `(signal suppressed by config)`.
+- **Git author display-name variants read as takeovers**: `B-ORPHAN-TAKEOVER`
+  compared raw git `%an` strings, so the same person committing as `Alice B` and
+  `alice-b` looked like a new author. Author comparison is now normalized via
+  the shared `aur_identity` module, with a raw fallback so two distinct
+  non-ASCII names are not collapsed into a match. Submitter-vs-maintainer
+  remains an exact comparison — both are AUR account names.
+- **Worst-first ordering**: bulk scan, benchmark, and hook summaries sorted only
+  by trust score, so a tier-floored package with a high score printed last
+  despite being the most severe result. They now sort by tier first.
+
 ### Changed
 - **Project identity**: the personal fork is renamed from `traur` to `bewaur`.
   The CLI, hook binary, ALPM hook, config directory, cache directory, package,

@@ -34,6 +34,7 @@ impl Feature for InstallScriptAnalysis {
                     description: pat.description.clone(),
                     is_override_gate: pat.override_gate,
                     matched_line,
+                    min_tier: None,
                 });
             }
         }
@@ -50,6 +51,7 @@ impl Feature for InstallScriptAnalysis {
                 ),
                 is_override_gate: false,
                 matched_line: Some(install.matched_line.clone()),
+                min_tier: None,
             });
         }
         if let Some(ioc) = js_packages.known_june_iocs.first() {
@@ -63,6 +65,7 @@ impl Feature for InstallScriptAnalysis {
                 ),
                 is_override_gate: false,
                 matched_line: Some(ioc.matched_line.clone()),
+                min_tier: None,
             });
         }
         if let Some(matched_line) =
@@ -76,6 +79,7 @@ impl Feature for InstallScriptAnalysis {
                     .to_string(),
                 is_override_gate: false,
                 matched_line: Some(matched_line),
+                min_tier: None,
             });
         }
 

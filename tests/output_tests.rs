@@ -14,6 +14,7 @@ fn make_signal(id: &str, category: SignalCategory, points: u32, description: &st
         description: description.to_string(),
         is_override_gate: override_gate,
         matched_line: None,
+        min_tier: None,
     }
 }
 
@@ -25,6 +26,7 @@ fn make_signal_with_line(id: &str, category: SignalCategory, points: u32, descri
         description: description.to_string(),
         is_override_gate: override_gate,
         matched_line: Some(line.to_string()),
+        min_tier: None,
     }
 }
 
@@ -45,6 +47,7 @@ fn trusted_no_signals() {
         tier: Tier::Trusted,
         signals: vec![],
         override_gate_fired: None,
+        tier_floor: None,
     };
     let out = render(&result, false);
     assert_eq!(out, "\
@@ -65,6 +68,7 @@ fn trusted_with_signals() {
             make_signal("M-VOTES-LOW", SignalCategory::Metadata, 5, "Low vote count", false),
         ],
         override_gate_fired: None,
+        tier_floor: None,
     };
     let out = render(&result, false);
     assert_eq!(out, "\
@@ -89,6 +93,7 @@ fn ok_with_signals() {
             make_signal("P-WGET-DOWNLOAD", SignalCategory::Pkgbuild, 35, "Downloads file with wget", false),
         ],
         override_gate_fired: None,
+        tier_floor: None,
     };
     let out = render(&result, false);
     assert_eq!(out, "\
@@ -113,6 +118,7 @@ fn sketchy_with_signals() {
             make_signal("M-VOTES-ZERO", SignalCategory::Metadata, 20, "Zero votes", false),
         ],
         override_gate_fired: None,
+        tier_floor: None,
     };
     let out = render(&result, false);
     assert_eq!(out, "\
@@ -138,6 +144,7 @@ fn suspicious_with_signals() {
             make_signal("B-NAME-IMPERSONATE", SignalCategory::Behavioral, 65, "Name impersonates popular package", false),
         ],
         override_gate_fired: None,
+        tier_floor: None,
     };
     let out = render(&result, false);
     assert_eq!(out, "\
@@ -163,6 +170,7 @@ fn malicious_with_override_gate() {
             make_signal("P-RAW-IP-URL", SignalCategory::Pkgbuild, 30, "Source URL uses raw IP address", false),
         ],
         override_gate_fired: Some("P-CURL-PIPE".to_string()),
+        tier_floor: None,
     };
     let out = render(&result, false);
     assert_eq!(out, "\
@@ -185,6 +193,7 @@ fn malicious_no_signals_only_gate() {
             make_signal("P-REVSHELL-DEVTCP", SignalCategory::Pkgbuild, 90, "Reverse shell via /dev/tcp", true),
         ],
         override_gate_fired: Some("P-REVSHELL-DEVTCP".to_string()),
+        tier_floor: None,
     };
     let out = render(&result, false);
     assert_eq!(out, "\
@@ -212,6 +221,7 @@ fn verbose_shows_matched_lines() {
             make_signal("M-VOTES-ZERO", SignalCategory::Metadata, 20, "Zero votes", false),
         ],
         override_gate_fired: Some("P-CURL-PIPE".to_string()),
+        tier_floor: None,
     };
     let out = render(&result, true);
     assert_eq!(out, "\
@@ -235,6 +245,7 @@ fn verbose_without_matched_line_shows_nothing_extra() {
             make_signal("M-NEW-PACKAGE", SignalCategory::Metadata, 10, "Package is less than 6 months old", false),
         ],
         override_gate_fired: None,
+        tier_floor: None,
     };
     let verbose_out = render(&result, true);
     let normal_out = render(&result, false);
@@ -257,6 +268,7 @@ fn text_output_visibly_escapes_terminal_controls_and_bidi() {
             "curl | bash\u{1b}]52;c;payload\u{7}",
         )],
         override_gate_fired: Some("P-\u{202e}FORGED".to_string()),
+        tier_floor: None,
     };
 
     let out = render(&result, true);
@@ -293,6 +305,7 @@ fn signal_prefix_levels() {
             make_signal("LOW", SignalCategory::Metadata, 10, "low severity", false),
         ],
         override_gate_fired: Some("GATE".to_string()),
+        tier_floor: None,
     };
     let out = render(&result, false);
     // Verify each prefix level
@@ -340,4 +353,58 @@ fn full_pipeline_malicious_shows_all_signals() {
     for signal in &result.signals {
         assert!(out.contains(&signal.id), "signal {} must appear in output", signal.id);
     }
+}
+
+// ---------- TIER FLOOR ----------
+
+#[test]
+fn tier_floor_line_explains_the_score_tier_divergence() {
+    let result = ScanResult {
+        package: "adopted-pkg".to_string(),
+        score: 84,
+        tier: Tier::Ok,
+        signals: vec![make_signal(
+            "B-ORPHAN-TAKEOVER",
+            SignalCategory::Behavioral,
+            50,
+            "Adopted package with new git author (mallory) — orphan takeover pattern",
+            false,
+        )],
+        override_gate_fired: None,
+        tier_floor: Some(bewaur::shared::scoring::TierFloorReason {
+            tier: Tier::Ok,
+            signal: "B-ORPHAN-TAKEOVER".to_string(),
+        }),
+    };
+    let out = render(&result, false);
+    assert!(out.contains("(trust: 84/100)"), "{out}");
+    assert!(out.contains("Trust: OK"), "{out}");
+    assert!(
+        out.contains(" ! Capped at OK by B-ORPHAN-TAKEOVER\n"),
+        "floor line missing or malformed:\n{out}"
+    );
+    assert!(!out.contains("suppressed by config"), "{out}");
+}
+
+#[test]
+fn tier_floor_line_flags_a_signal_hidden_by_config() {
+    // The user ignored the signal, so it is absent from `signals` — but the
+    // floor still applied. The output has to say so.
+    let result = ScanResult {
+        package: "adopted-pkg".to_string(),
+        score: 84,
+        tier: Tier::Ok,
+        signals: vec![],
+        override_gate_fired: None,
+        tier_floor: Some(bewaur::shared::scoring::TierFloorReason {
+            tier: Tier::Ok,
+            signal: "B-ORPHAN-TAKEOVER".to_string(),
+        }),
+    };
+    let out = render(&result, false);
+    assert!(
+        out.contains(" ! Capped at OK by B-ORPHAN-TAKEOVER (signal suppressed by config)\n"),
+        "suppressed-signal note missing:\n{out}"
+    );
+    assert!(out.contains("No negative signals found."), "{out}");
 }

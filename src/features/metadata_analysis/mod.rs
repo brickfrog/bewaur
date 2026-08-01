@@ -21,6 +21,7 @@ impl Feature for MetadataAnalysis {
                 description: "Package has zero votes".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         } else if meta.num_votes < 5 {
             signals.push(Signal {
@@ -30,6 +31,7 @@ impl Feature for MetadataAnalysis {
                 description: format!("Package has very few votes ({})", meta.num_votes),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -42,6 +44,7 @@ impl Feature for MetadataAnalysis {
                 description: "Popularity is 0 (no recent usage)".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -54,6 +57,7 @@ impl Feature for MetadataAnalysis {
                 description: "Package is orphaned (no maintainer)".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -66,6 +70,7 @@ impl Feature for MetadataAnalysis {
                 description: "No upstream URL provided".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -78,6 +83,7 @@ impl Feature for MetadataAnalysis {
                 description: "No license specified".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 
@@ -90,6 +96,7 @@ impl Feature for MetadataAnalysis {
                 description: "Package is flagged as out of date".to_string(),
                 is_override_gate: false,
                 matched_line: None,
+                min_tier: None,
             });
         }
 

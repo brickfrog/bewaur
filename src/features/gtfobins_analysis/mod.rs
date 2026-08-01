@@ -22,6 +22,7 @@ impl Feature for GtfobinsAnalysis {
                     description: "install with SUID/SGID mode bits".to_string(),
                     is_override_gate: false,
                     matched_line: Some(matched_line),
+                    min_tier: None,
                 });
             }
         }
@@ -54,6 +55,7 @@ fn match_patterns(content: &str, id_prefix: &str, desc_suffix: &str) -> Vec<Sign
                 },
                 is_override_gate: pat.override_gate,
                 matched_line,
+                min_tier: None,
             });
         }
     }

@@ -9,7 +9,8 @@ Reusable modules consumed by features and the coordinator. Code goes here if it'
 | `models.rs` | `PackageContext` (with `github_stars`, `github_not_found`, `aur_comments`), `AurPackage`, `GitCommit` | All features |
 | `aur_rpc.rs` | AUR RPC v5 API client (reqwest, blocking; encoded queries and bounded HTTP diagnostics) | coordinator, metadata, maintainer, name features |
 | `aur_git.rs` | Strict AUR Git refresh to an explicitly fetched `master`, dirty/stale cache rejection, and diff/log operations | coordinator, pkgbuild, install_script, git_history features |
-| `scoring.rs` | `Signal`, `SignalCategory`, `Tier`, `ScanResult`, `compute_score()` | coordinator |
+| `scoring.rs` | `Signal`, `SignalCategory`, `Tier`, `TierFloor`, `ScanResult`, `hard_findings()`, `compute_score_with()` | coordinator |
+| `aur_identity.rs` | Normalized identity comparison across the AUR-account and git-author-display-name namespaces, with a raw fallback when normalization empties a key | orphan_takeover, pkgbuild_diff features |
 | `patterns.rs` | Load TOML pattern rules, compile to regex | pkgbuild, install_script, source_url, gtfobins features |
 | `cache.rs` | XDG cache paths plus non-symlink-following stats and validated, explicit Git-cache pruning | aur_git, aur_rpc, CLI |
 | `config.rs` | Versioned strict config with exact/permanent authorization, exclusive update locking, atomic replacement, and private permissions | coordinator, gate, hook, CLI |

@@ -31,6 +31,18 @@ Tiers: TRUSTED (81-100), OK (61-80), SKETCHY (41-60), SUSPICIOUS (21-40), MALICI
 
 Override gates: 47 signals across download-and-execute, reverse shells, GTFOBins binary abuse, and variable-concatenated exec escalate directly to MALICIOUS.
 
+Tier floors are a separate, weaker mechanism: a signal may declare the
+least-severe tier it will permit (`Signal.min_tier`), applied after the score is
+computed. A floor can only raise severity, never lower it, and cannot reach
+MALICIOUS — that verdict stays exclusive to override gates. Floors exist because
+each category is capped at 100 before weighting, so behavioral signals alone can
+contribute at most `0.25 * 100 = 25` risk and can never leave the TRUSTED band
+on score alone. `B-ORPHAN-TAKEOVER` carries an `Ok` floor.
+
+Override gates and tier floors are computed from the *unfiltered* signal set, so
+`bewaur ignore` suppresses a signal's points and its report row but can never
+disable a detection.
+
 ## Build
 
 ```bash
@@ -75,7 +87,8 @@ prebuilt binary-release package.
 |------|---------|
 | `src/coordinator.rs` | Orchestrates features and scoring |
 | `src/features/mod.rs` | Feature trait + registry |
-| `src/shared/scoring.rs` | Score computation, tiers, override gates. Signal has `matched_line: Option<String>` for verbose output |
+| `src/shared/scoring.rs` | Score computation, tiers, override gates, tier floors. Signal has `matched_line: Option<String>` for verbose output and `min_tier: Option<TierFloor>` for the floor |
+| `src/shared/aur_identity.rs` | Normalized AUR account / git author-name comparison, with a raw fallback for non-ASCII identities |
 | `src/shared/aur_rpc.rs` | AUR RPC v5 API client |
 | `src/shared/aur_git.rs` | Git clone/pull/diff operations |
 | `src/shared/bulk.rs` | Batch metadata fetch, maintainer prefetch, clone-with-retry |

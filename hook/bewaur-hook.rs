@@ -297,7 +297,7 @@ fn main() {
 
     // Full detail for all results
     if !results.is_empty() {
-        results.sort_by(|a, b| a.score.cmp(&b.score));
+        results.sort_by(|a, b| b.tier.cmp(&a.tier).then(a.score.cmp(&b.score)));
         for result in &results {
             let _ = writeln!(hook_io);
             output::write_text(&mut hook_io, result, false);

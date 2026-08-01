@@ -107,6 +107,7 @@ impl Feature for PkgbuildAnalysis {
                     description: pat.description.clone(),
                     is_override_gate: pat.override_gate,
                     matched_line,
+                    min_tier: None,
                 });
             }
         }
@@ -123,6 +124,7 @@ impl Feature for PkgbuildAnalysis {
                 ),
                 is_override_gate: false,
                 matched_line: Some(install.matched_line.clone()),
+                min_tier: None,
             });
         }
         if let Some(ioc) = js_packages.known_june_iocs.first() {
@@ -136,6 +138,7 @@ impl Feature for PkgbuildAnalysis {
                 ),
                 is_override_gate: false,
                 matched_line: Some(ioc.matched_line.clone()),
+                min_tier: None,
             });
         }
 
