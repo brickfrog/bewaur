@@ -1407,10 +1407,10 @@ fn discover_local_source_candidates(
         let arguments = &command.words[command_index + 1..];
 
         if command_name == "source" || command_name == "." {
-            if let Some(argument) = arguments.iter().find(|word| !word.value.starts_with('-'))
-                && let Some(path) = resolve_explicit_helper(argument)?
-            {
-                add_local_source_candidate(&mut candidates, path, true, true);
+            if let Some(argument) = arguments.iter().find(|word| !word.value.starts_with('-')) {
+                for path in resolve_explicit_helpers(argument, pkgbase, package_names)? {
+                    add_local_source_candidate(&mut candidates, path, true, true);
+                }
             }
             continue;
         }
@@ -1420,7 +1420,7 @@ fn discover_local_source_candidates(
             || executable_word.value.starts_with("$srcdir/")
             || executable_word.value.starts_with("${srcdir}/")
         {
-            if let Some(path) = resolve_explicit_helper(executable_word)? {
+            for path in resolve_explicit_helpers(executable_word, pkgbase, package_names)? {
                 add_local_source_candidate(&mut candidates, path, true, false);
             }
             continue;
@@ -1428,12 +1428,12 @@ fn discover_local_source_candidates(
 
         if is_script_interpreter(command_name) {
             for argument in interpreter_file_arguments(command_name, arguments) {
-                if let Some(path) = resolve_explicit_helper(&argument)? {
+                for path in resolve_explicit_helpers(&argument, pkgbase, package_names)? {
                     add_local_source_candidate(&mut candidates, path, true, false);
                 }
             }
             for input_file in &command.input_files {
-                if let Some(path) = resolve_explicit_helper(input_file)? {
+                for path in resolve_explicit_helpers(input_file, pkgbase, package_names)? {
                     add_local_source_candidate(&mut candidates, path, true, false);
                 }
             }
@@ -1554,39 +1554,105 @@ fn source_is_remote(value: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-fn resolve_explicit_helper(word: &ShellWord) -> Result<Option<String>, String> {
+fn resolve_explicit_helpers(
+    word: &ShellWord,
+    pkgbase: &str,
+    package_names: &[String],
+) -> Result<Vec<String>, String> {
     let value = word.value.as_str();
     if Path::new(value).is_absolute() || source_is_remote(value)? {
-        return Ok(None);
+        return Ok(Vec::new());
     }
 
     let srcdir_prefixes = ["${srcdir}/", "$srcdir/"];
-    if let Some(path) = srcdir_prefixes
+    let path = srcdir_prefixes
         .into_iter()
         .find_map(|prefix| value.strip_prefix(prefix))
-    {
-        if path.contains('$') || path.contains('`') {
-            return Err(format!(
+        .unwrap_or(value);
+
+    let resolved = if word.has_expansion || path.contains('$') || path.contains('`') {
+        resolve_known_helper_template(path, pkgbase, package_names).ok_or_else(|| {
+            format!(
                 "dynamic local helper on PKGBUILD line {} cannot be resolved safely",
                 word.line
-            ));
+            )
+        })?
+    } else {
+        vec![path.to_string()]
+    };
+
+    resolved
+        .into_iter()
+        .map(|path| normalize_relative_path(&path, "local executable helper"))
+        .collect()
+}
+
+/// Resolve only the package identity expansions whose values are supplied by
+/// inert `.SRCINFO`. Every occurrence of `pkgname` in one result uses the same
+/// split-package name. Other variables, parameter operators, command
+/// substitutions, and backticks remain unresolvable and fail the gate closed.
+fn resolve_known_helper_template(
+    value: &str,
+    pkgbase: &str,
+    package_names: &[String],
+) -> Option<Vec<String>> {
+    fn resolve_one(value: &str, pkgbase: &str, pkgname: &str) -> Option<String> {
+        let bytes = value.as_bytes();
+        let mut resolved = String::with_capacity(value.len());
+        let mut literal_start = 0usize;
+        let mut index = 0usize;
+
+        while index < bytes.len() {
+            if bytes[index] == b'`' {
+                return None;
+            }
+            if bytes[index] != b'$' {
+                index += 1;
+                continue;
+            }
+
+            resolved.push_str(&value[literal_start..index]);
+            index += 1;
+            let (name, end) = if bytes.get(index) == Some(&b'{') {
+                let name_start = index + 1;
+                let relative_end = value[name_start..].find('}')?;
+                let end = name_start + relative_end;
+                (&value[name_start..end], end + 1)
+            } else {
+                let name_start = index;
+                while bytes
+                    .get(index)
+                    .is_some_and(|byte| *byte == b'_' || byte.is_ascii_alphanumeric())
+                {
+                    index += 1;
+                }
+                if index == name_start {
+                    return None;
+                }
+                (&value[name_start..index], index)
+            };
+
+            match name {
+                "pkgbase" => resolved.push_str(pkgbase),
+                "pkgname" => resolved.push_str(pkgname),
+                _ => return None,
+            }
+            index = end;
+            literal_start = end;
         }
-        return Ok(Some(normalize_relative_path(
-            path,
-            "local executable helper",
-        )?));
+        resolved.push_str(&value[literal_start..]);
+        Some(resolved)
     }
 
-    if word.has_expansion || value.contains('$') || value.contains('`') {
-        return Err(format!(
-            "dynamic local helper on PKGBUILD line {} cannot be resolved safely",
-            word.line
-        ));
+    let uses_pkgname = value.contains("$pkgname") || value.contains("${pkgname}");
+    if uses_pkgname {
+        package_names
+            .iter()
+            .map(|pkgname| resolve_one(value, pkgbase, pkgname))
+            .collect()
+    } else {
+        Some(vec![resolve_one(value, pkgbase, "")?])
     }
-    Ok(Some(normalize_relative_path(
-        value,
-        "local executable helper",
-    )?))
 }
 
 fn add_local_source_candidate(
