@@ -5,6 +5,7 @@ pub mod git_history_analysis;
 pub mod github_stars;
 pub mod gtfobins_analysis;
 pub mod install_script_analysis;
+pub mod known_compromised;
 pub mod maintainer_analysis;
 pub mod metadata_analysis;
 pub mod name_analysis;
@@ -41,5 +42,6 @@ pub fn all_features() -> Vec<Box<dyn Feature>> {
         Box::new(pkgbuild_diff_analysis::PkgbuildDiffAnalysis),
         Box::new(github_stars::GitHubStars),
         Box::new(aur_comments_analysis::AurCommentsAnalysis),
+        Box::new(known_compromised::KnownCompromised),
     ]
 }

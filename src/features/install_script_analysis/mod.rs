@@ -14,11 +14,20 @@ impl Feature for InstallScriptAnalysis {
 
         let compiled = patterns::compiled_patterns();
         let executable_content = crate::shared::shell_syntax::strip_comments(content);
+        let joined_content =
+            crate::shared::shell_syntax::join_quoted_fragments(&executable_content);
         let mut signals = Vec::new();
 
         for pat in compiled {
-            if pat.regex.is_match(&executable_content) {
-                let matched_index = executable_content
+            let analyzed_content = if pat.regex.is_match(&executable_content) {
+                &executable_content
+            } else if pat.regex.is_match(&joined_content) {
+                &joined_content
+            } else {
+                continue;
+            };
+            {
+                let matched_index = analyzed_content
                     .lines()
                     .position(|line| pat.regex.is_match(line));
                 let matched_line = matched_index.and_then(|index| {
@@ -68,18 +77,38 @@ impl Feature for InstallScriptAnalysis {
                 min_tier: None,
             });
         }
-        if let Some(matched_line) =
-            crate::shared::js_package_manager::find_privileged_chmod(&executable_content)
-        {
-            signals.push(Signal {
-                id: "P-INSTALL-SUID-SGID".to_string(),
-                category: SignalCategory::Pkgbuild,
-                points: 90,
-                description: "Install script creates or changes a file with SUID/SGID mode"
-                    .to_string(),
-                is_override_gate: false,
-                matched_line: Some(matched_line),
-                min_tier: None,
+        let privileged = crate::shared::js_package_manager::find_privileged_mode_changes(
+            &executable_content,
+            false,
+        );
+        if let Some(first) = privileged.first() {
+            let sandbox_only =
+                crate::shared::js_package_manager::privileged_changes_only_chrome_sandbox(
+                    &privileged,
+                );
+            signals.push(if sandbox_only {
+                Signal {
+                    id: "P-INSTALL-SUID-CHROME-SANDBOX".to_string(),
+                    category: SignalCategory::Pkgbuild,
+                    points: 30,
+                    description:
+                        "Install script sets SUID on an Electron/Chromium chrome-sandbox helper"
+                            .to_string(),
+                    is_override_gate: false,
+                    matched_line: Some(first.matched_line.clone()),
+                    min_tier: None,
+                }
+            } else {
+                Signal {
+                    id: "P-INSTALL-SUID-SGID".to_string(),
+                    category: SignalCategory::Pkgbuild,
+                    points: 90,
+                    description: "Install script creates or changes a file with SUID/SGID mode"
+                        .to_string(),
+                    is_override_gate: false,
+                    matched_line: Some(first.matched_line.clone()),
+                    min_tier: None,
+                }
             });
         }
 
@@ -228,6 +257,36 @@ mod tests {
     fn install_miner() {
         let ids = analyze("./xmrig --donate-level 0");
         assert!(has(&ids, "P-INSTALL-MINER"));
+    }
+
+    #[test]
+    fn install_modprobe_by_name_is_weaker() {
+        let ids = analyze("post_install() { modprobe uinput || echo failed; }");
+        assert!(has(&ids, "P-INSTALL-MODPROBE"), "got: {ids:?}");
+        assert!(!has(&ids, "P-INSTALL-KERNEL-MOD"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn chrome_sandbox_suid_is_down_weighted_only_when_exclusive() {
+        let ids = analyze("chmod 4755 '/opt/App/chrome-sandbox' || true");
+        assert!(has(&ids, "P-INSTALL-SUID-CHROME-SANDBOX"), "got: {ids:?}");
+        assert!(!has(&ids, "P-INSTALL-SUID-SGID"), "got: {ids:?}");
+        for content in [
+            "chmod 4755 /opt/App/chrome-sandbox /usr/bin/helper",
+            "chmod 4755 /opt/App/chrome-sandbox\nchmod u+s /usr/bin/helper",
+            "chmod 4755 /opt/App/chrome-sandbox-evil",
+            "chmod 4755 /opt/App/*",
+            "chmod 6755 /opt/App/chrome-sandbox",
+            "chmod 4777 /opt/App/chrome-sandbox",
+            "chmod u+s /opt/App/chrome-sandbox",
+        ] {
+            let ids = analyze(content);
+            assert!(has(&ids, "P-INSTALL-SUID-SGID"), "{content}: {ids:?}");
+            assert!(
+                !has(&ids, "P-INSTALL-SUID-CHROME-SANDBOX"),
+                "{content}: {ids:?}"
+            );
+        }
     }
 
     #[test]

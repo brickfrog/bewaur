@@ -29,6 +29,30 @@ Downloader-stdout and interpreter-stdin redirections take precedence over a
 pipe, matching shell fd behavior. Dynamic shell strings and process
 substitutions remain deliberately unanalyzed rather than guessed.
 
+### Pipeline Composition (SA-PIPE-DOWNLOAD-EXEC, SA-PIPE-DECODE-EXEC, SA-EXFIL-PIPE, SA-EVAL-SUBST-EXEC)
+`shell_syntax::find_compositions` follows whole pipelines across any number of
+stages, honouring stdin/stdout redirections that break the data flow, and
+recurses into `$(...)`, backticks, `<(...)`/`>(...)`, literal `sh -c`/`eval`
+strings, and heredocs that feed an interpreter. Single-quoted text, comments
+and inert heredocs stay inert.
+
+- **SA-PIPE-DOWNLOAD-EXEC**: curl/wget output reaches a stdin-reading
+  interpreter (`sh -s`, `bash --norc`, `sudo zsh`, `python3`, ...) through
+  intermediate stages (`| base64 -d |`, `| gunzip |`). A plain adjacent
+  `curl ... | sh|bash` on one line is left to `P-CURL-PIPE`/`P-WGET-PIPE`.
+- **SA-PIPE-DECODE-EXEC**: base64/base32/basenc/xxd -r/openssl -d/uudecode output
+  piped into an interpreter. Decompressors alone do not count.
+- **SA-EXFIL-PIPE**: a stage naming SSH/cloud/kube/GPG/netrc/git-credential
+  paths or `/etc/shadow` flows into a network sender (curl, wget, nc, socat,
+  scp, or `xargs` running one), or a sender takes such a path directly.
+- **SA-EVAL-SUBST-EXEC**: `eval`, `sh -c`, an interpreter here-string, or an
+  interpreter/`source` process substitution runs a substitution that downloads
+  or decodes.
+
+Interpreters reading their program from `-c`/`-e`/`-m`/`-r`/`-p` (and awk,
+jq, tar, sha256sum) are never treated as executing stdin, so
+`curl api | awk '{print $4}'` and `| python -c ...` stay clean.
+
 ### Char-by-Char Construction (SA-CHARBYCHAR-CONSTRUCT)
 Detects 3+ `$(printf '\xNN')` or `$(echo -e '\xNN')` subshells on a single line, indicating character-by-character command assembly.
 
@@ -58,6 +82,10 @@ unrelated commands do not suppress the signal.
 | SA-HIGH-ENTROPY-HEREDOC | 55 | no | High-entropy heredoc content |
 | SA-BINARY-DOWNLOAD-NOCOMPILE | 60 | no | Download + chmod +x, no compilation |
 | SA-QUOTED-DOWNLOAD-EXEC | 90 | yes | Quoted/escaped download-to-interpreter pipeline |
+| SA-PIPE-DOWNLOAD-EXEC | 95 | yes | Download reaches an interpreter across stages/substitutions/wrappers |
+| SA-PIPE-DECODE-EXEC | 90 | yes | Decoded data piped into an interpreter |
+| SA-EXFIL-PIPE | 95 | yes | Credential material flows into a network sender |
+| SA-EVAL-SUBST-EXEC | 95 | yes | Executed substitution that downloads or decodes |
 
 All signals use `SignalCategory::Pkgbuild` (weight 0.45). Install script signals use the same IDs with `IS-` prefix (e.g., `IS-SA-VAR-CONCAT-EXEC`).
 
@@ -66,7 +94,7 @@ All signals use `SignalCategory::Pkgbuild` (weight 0.45). Install script signals
 - **Ordered single-pass variable resolution** — no recursive expansion; each
   assignment affects only later textual uses
 - **PKGBUILD standard vars excluded** — prevents false positives on `$pkgname`, `$pkgver`, etc.
-- **No overlap with regex feature** — only emits signals when obfuscation hides the pattern from literal matching
+- **No overlap with regex feature** — only emits signals when obfuscation or pipeline structure hides the pattern from literal matching
 - **All regexes via `LazyLock`** — compiled once, zero per-invocation overhead
 
 ## Dependencies

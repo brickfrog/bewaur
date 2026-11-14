@@ -31,6 +31,15 @@
   and link-pivot refusal; GNU/PAX and compression failures; corrupt streams; and
   transaction-time install-script analysis.
 
+- **Corpus harness** (`tests/corpus_cases.rs`): Offline policy checks over
+  `tests/corpus/`. Benign cases are real AUR packages (imported from upstream
+  traur, MIT) that must stay at or below `max_tier` (normally `ok`, because the
+  strict gate blocks SKETCHY). Malicious cases are incident-derived samples
+  with a `min_tier` and `required` bewaur signal IDs. Contexts are built from
+  file contents only; nothing is sourced. `CASE` keys: `max_tier`, `min_tier`,
+  `required`, `forbidden`, `helpers`, `install`, `note`, `revision`. Run with
+  `cargo test --test corpus_cases -- --nocapture` for the per-case report.
+
 ## Fixtures
 
 - `fixtures/malicious/` — PKGBUILDs based on known attacks (CHAOS RAT, Xeactor patterns, synthetic examples)

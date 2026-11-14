@@ -198,14 +198,22 @@ fn extract_array_body(content: &str, body_start: usize) -> Option<&str> {
 
 /// Count Bash words while preserving quote concatenation. For example,
 /// `"filename"::"https://example"` is one source entry, not three tokens.
+/// Unquoted comma brace expansion multiplies a word, so `foo.tar{,.sig}` is two
+/// entries; `${parameter}` expansion is not a brace group.
 fn count_static_shell_words(body: &str) -> Option<usize> {
     let mut count = 0usize;
     let mut in_word = false;
     let mut quote = None;
     let mut escaped = false;
     let mut in_comment = false;
+    // Per-word expansion factor and the open brace groups' comma counts.
+    let mut multiplier = 1usize;
+    let mut braces: Vec<usize> = Vec::new();
+    let mut parameter_depth = 0usize;
+    let mut previous = '\0';
 
     for ch in body.chars() {
+        let last = std::mem::replace(&mut previous, ch);
         if in_comment {
             if ch == '\n' {
                 in_comment = false;
@@ -237,27 +245,62 @@ fn count_static_shell_words(body: &str) -> Option<usize> {
                 in_word = true;
             }
             '#' if !in_word => in_comment = true,
-            c if c.is_whitespace() => {
+            '{' if last == '$' || parameter_depth > 0 => {
+                parameter_depth += 1;
+                in_word = true;
+            }
+            '}' if parameter_depth > 0 => {
+                parameter_depth -= 1;
+                in_word = true;
+            }
+            '{' => {
+                braces.push(0);
+                in_word = true;
+            }
+            ',' if !braces.is_empty() => {
+                if let Some(commas) = braces.last_mut() {
+                    *commas += 1;
+                }
+                in_word = true;
+            }
+            '}' if !braces.is_empty() => {
+                let commas = braces.pop().unwrap_or(0);
+                multiplier = multiplier.saturating_mul(commas + 1);
+                in_word = true;
+            }
+            c if c.is_whitespace() && braces.is_empty() && parameter_depth == 0 => {
                 if in_word {
-                    count += 1;
+                    count += multiplier;
                     in_word = false;
                 }
+                multiplier = 1;
             }
             _ => in_word = true,
         }
     }
 
-    if quote.is_some() || escaped {
+    if quote.is_some() || escaped || !braces.is_empty() || parameter_depth > 0 {
         return None;
     }
     if in_word {
-        count += 1;
+        count += multiplier;
     }
     Some(count)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::count_static_shell_words;
+
+    #[test]
+    fn brace_expansion_counts_each_alternative() {
+        assert_eq!(count_static_shell_words("https://x/a-${pkgver}.tar.bz2{,.sig}"), Some(2));
+        assert_eq!(count_static_shell_words("a{1,2,3} b"), Some(4));
+        assert_eq!(count_static_shell_words("\"x{,.sig}\""), Some(1));
+        assert_eq!(count_static_shell_words("x-${v}.tgz y-${v%.*}"), Some(2));
+        assert_eq!(count_static_shell_words("x{"), None);
+    }
+
     use super::*;
 
     fn analyze(name: &str, content: &str) -> Vec<String> {

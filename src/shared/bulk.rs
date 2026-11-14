@@ -104,10 +104,42 @@ pub fn batch_fetch_metadata(names: &[String]) -> Result<BatchMetadata, String> {
     batch_fetch_metadata_with(names, aur_rpc::fetch_packages_info)
 }
 
-/// Pre-fetch all maintainer package lists in parallel.
-pub fn prefetch_maintainer_packages(
-    metadata: &HashMap<String, AurPackage>,
-) -> HashMap<String, Vec<AurPackage>> {
+/// Concurrent maintainer lookups during a bulk prefetch. Bounded so a large
+/// `--all-installed` scan does not burst the AUR RPC endpoint.
+const MAINTAINER_FETCH_CONCURRENCY: usize = 4;
+
+/// Per-maintainer prefetch outcome. A failed lookup is kept as an error rather
+/// than dropped: an empty list would read as "unknown" to the reputation and
+/// adoption checks and silently disable them.
+pub type MaintainerPackages = HashMap<String, Result<Vec<AurPackage>, String>>;
+
+/// Fetch one maintainer's package list, retrying with exponential backoff.
+pub fn fetch_maintainer_packages_with_retry(maintainer: &str) -> Result<Vec<AurPackage>, String> {
+    fetch_with_retry(
+        || aur_rpc::fetch_maintainer_packages(maintainer),
+        RETRY_BASE_DELAY,
+    )
+}
+
+fn fetch_with_retry<T>(
+    mut fetch: impl FnMut() -> Result<T, String>,
+    base_delay: Duration,
+) -> Result<T, String> {
+    let mut attempt = 0;
+    loop {
+        match fetch() {
+            Ok(value) => return Ok(value),
+            Err(_) if attempt + 1 < MAX_RETRIES => {
+                std::thread::sleep(base_delay * 2u32.pow(attempt));
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Pre-fetch all maintainer package lists with bounded concurrency and retry.
+pub fn prefetch_maintainer_packages(metadata: &HashMap<String, AurPackage>) -> MaintainerPackages {
     let maintainers: Vec<&str> = metadata
         .values()
         .filter_map(|pkg| pkg.maintainer.as_deref())
@@ -120,14 +152,43 @@ pub fn prefetch_maintainer_packages(
         maintainers.len()
     );
 
-    maintainers
-        .par_iter()
-        .filter_map(|m| {
-            aur_rpc::fetch_maintainer_packages(m)
-                .ok()
-                .map(|pkgs| (m.to_string(), pkgs))
-        })
-        .collect()
+    let fetch_all = || {
+        maintainers
+            .par_iter()
+            .map(|m| (m.to_string(), fetch_maintainer_packages_with_retry(m)))
+            .collect()
+    };
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(MAINTAINER_FETCH_CONCURRENCY)
+        .build()
+    {
+        Ok(pool) => pool.install(fetch_all),
+        Err(_) => maintainers
+            .iter()
+            .map(|m| (m.to_string(), fetch_maintainer_packages_with_retry(m)))
+            .collect(),
+    }
+}
+
+/// The prefetched package list for `metadata`'s maintainer. Orphaned packages
+/// have none to fetch; a maintainer whose lookup failed, or was never
+/// prefetched, is an incomplete scan input and an error.
+pub fn maintainer_packages_for(
+    metadata: &AurPackage,
+    prefetched: &MaintainerPackages,
+) -> Result<Vec<AurPackage>, String> {
+    let Some(maintainer) = metadata.maintainer.as_deref() else {
+        return Ok(Vec::new());
+    };
+    match prefetched.get(maintainer) {
+        Some(Ok(packages)) => Ok(packages.clone()),
+        Some(Err(error)) => Err(format!(
+            "maintainer package lookup for {maintainer} failed: {error}"
+        )),
+        None => Err(format!(
+            "maintainer package lookup for {maintainer} was not performed"
+        )),
+    }
 }
 
 /// Clone repo with retry + exponential backoff. Returns PackageContext or error.
@@ -172,6 +233,58 @@ mod tests {
             last_modified: 0,
             license: None,
         }
+    }
+
+    #[test]
+    fn failed_maintainer_lookup_is_an_error_not_an_empty_list() {
+        let mut owned = package("owned");
+        owned.maintainer = Some("alice".to_string());
+        let mut prefetched = MaintainerPackages::new();
+        prefetched.insert("alice".to_string(), Err("HTTP 503".to_string()));
+        let error = maintainer_packages_for(&owned, &prefetched).unwrap_err();
+        assert!(error.contains("alice") && error.contains("503"), "{error}");
+
+        assert!(maintainer_packages_for(&owned, &MaintainerPackages::new()).is_err());
+
+        prefetched.insert("alice".to_string(), Ok(vec![package("a"), package("b")]));
+        assert_eq!(
+            maintainer_packages_for(&owned, &prefetched).unwrap().len(),
+            2
+        );
+
+        let orphan = package("orphan");
+        assert!(
+            maintainer_packages_for(&orphan, &prefetched)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn fetch_with_retry_retries_transient_failures_then_gives_up() {
+        let mut calls = 0;
+        let value = fetch_with_retry(
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err("transient".to_string())
+                } else {
+                    Ok(calls)
+                }
+            },
+            Duration::ZERO,
+        );
+        assert_eq!(value, Ok(3));
+
+        let mut calls = 0;
+        let error = fetch_with_retry::<()>(
+            || {
+                calls += 1;
+                Err(format!("attempt {calls}"))
+            },
+            Duration::ZERO,
+        );
+        assert_eq!(error, Err(format!("attempt {MAX_RETRIES}")));
     }
 
     #[test]

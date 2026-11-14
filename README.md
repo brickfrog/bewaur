@@ -47,6 +47,7 @@ cargo build --release --frozen
 
 ```bash
 bewaur scan                # scan all installed AUR packages
+bewaur scan --flagged-only --notify  # desktop notification when something is flagged
 bewaur scan <package>      # scan a package
 bewaur gate --build-dir .  # fail-closed scan before an AUR helper builds
 bewaur approve --build-dir .       # display the exact-tree scan/digest; do not save
@@ -70,6 +71,19 @@ result. Every network-backed scan refreshes a clean cached repository to the
 exact fetched AUR `master` commit and applies the same path-confined build-tree
 loader used by `bewaur gate`; a failed refresh or unreadable declared input is
 an error rather than permission to use stale or partial data.
+
+### Unattended scans
+
+New detections and the vendored compromise list also apply to packages that are
+already installed. The package ships an opt-in daily user timer:
+
+```bash
+systemctl --user enable --now bewaur-scan.timer
+```
+
+It runs `bewaur scan --all-installed --flagged-only --notify` and sends a
+desktop notification only when a package is SKETCHY or worse or could not be
+scanned.
 
 ## Cache maintenance
 
@@ -232,7 +246,7 @@ and transaction-script hazards.
 
 ## How it works
 
-12 independent features emit scored signals per package:
+16 independent features emit scored signals per package, including:
 
 | Feature | What it checks |
 |---------|---------------|
@@ -245,9 +259,10 @@ and transaction-script hazards.
 | Maintainer analysis | New accounts, batch uploads |
 | Orphan takeover analysis | Submitter != maintainer, orphan takeover patterns |
 | Git history analysis | New network code, author changes |
-| Shell analysis | Beyond-regex obfuscation (var concat, indirect exec, data blobs) |
+| Shell analysis | Beyond-regex obfuscation and composition: multi-stage download/decode-to-interpreter pipelines, credential exfiltration, executed command substitutions |
 | GTFOBins analysis | Legitimate binary abuse |
 | Bin source verification | -bin package source domain vs upstream URL mismatch |
+| Known compromised | Packages on the June 2026 AUR compromise list (forces review) |
 
 ## Detection coverage
 
@@ -256,6 +271,10 @@ Patterns derived from real AUR malware incidents:
 - **CHAOS RAT (2025)** — browser impersonation packages, RAT distribution
 - **Google Chrome RAT (2025)** — .install script, Python download+execute
 - **Acroread (2018)** — orphan takeover, curl from paste service, systemd persistence
+- **June 2026 AUR campaign** — adopted orphans, named npm/bun payload installs, `.install` credential exfiltration, download-decode-execute pipelines
+
+An offline corpus of real AUR packages and incident-derived samples
+(`tests/corpus/`) keeps the false-positive budget and recall floor under test.
 
 Categories: download-and-execute, reverse shells, credential theft, persistence mechanisms, privilege escalation, C2/exfiltration, cryptocurrency mining, code obfuscation, kernel module loading, environment variable theft, system reconnaissance.
 

@@ -25,9 +25,23 @@ All signals use `SignalCategory::Pkgbuild` (weight 0.45). See `data/patterns.tom
 - `shared/patterns.rs` — loads and compiles regex patterns from TOML
 - `PackageContext.pkgbuild_content` — the PKGBUILD file content to analyze
 
+## Matching views
+
+Every pattern is matched against the comment-stripped PKGBUILD and, if that
+misses, against a quote-joined view (`shell_syntax::join_quoted_fragments`) in
+which prose-free quote/escape fragments are joined (`ba""sh`, `/dev/t''cp`,
+`c\url`). Quoted text containing whitespace or operators is never unquoted.
+Both views preserve line numbers. `P-CRYPTO-WALLET` additionally masks
+checksum arrays.
+
+`P-SUID-BIT` is replaced by `P-SUID-CHROME-SANDBOX` (+30) only when every SUID
+change the active-shell parser sees targets a file whose basename is exactly
+`chrome-sandbox` (the Electron convention) and every regex hit is such a line.
+
 ## Known false positives
 
-- `P-SYSTEMD-CREATE` (+35): Legitimate daemon packages create systemd services.
+- `P-SYSTEMD-CREATE` (+35): Enabling units, or installing units into `/etc/systemd` or a user's home. Shipping units under `$pkgdir/usr/lib/systemd/{system,user}` is deliberately not matched.
+- `P-KERNEL-MODULE-MODPROBE` (+25): Loading an in-tree module by name (e.g. `uinput`). Loading from a file path is the stronger `P-KERNEL-MODULE-LOAD`.
 - `P-BASE64` (+60): Some packages use base64 for icon encoding in desktop files.
 - `P-LD-PRELOAD` (+60): Some legitimate packages (like gamemode) use LD_PRELOAD.
 - `P-PYTHON-INLINE` (+45): Legitimate packages may use `python -c` for version checks or build logic.

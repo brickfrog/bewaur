@@ -1,0 +1,2 @@
+max_tier=ok
+note=eval of a version variable; P-EVAL-VAR is kept at full weight because pkgver can itself carry a payload, but a lone eval must not block the gate

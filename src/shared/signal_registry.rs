@@ -25,6 +25,7 @@ pub struct SignalDef {
 fn floor_for(id: &str) -> Option<TierFloor> {
     match id {
         "B-ORPHAN-TAKEOVER" | "B-UNPROVEN-ADOPTION" => Some(TierFloor::Ok),
+        "B-JUNE-2026-COMPROMISED" => Some(TierFloor::Sketchy),
         _ => None,
     }
 }
@@ -79,6 +80,8 @@ fn hardcoded_signals() -> Vec<SignalDef> {
         // name_analysis
         ("B-NAME-IMPERSONATE", Behavioral, 65, "Name looks like impersonation of a popular package", false),
         ("B-TYPOSQUAT", Behavioral, 55, "Name is suspiciously similar to a popular package", false),
+        // known_compromised
+        ("B-JUNE-2026-COMPROMISED", Behavioral, 50, "Package is on the public list of AUR packages compromised in June 2026", false),
         // maintainer_analysis
         ("B-MAINTAINER-NEW", Behavioral, 30, "Maintainer has only 1 package, created recently", false),
         ("B-MAINTAINER-SINGLE", Behavioral, 15, "Maintainer has only 1 package", false),
@@ -123,6 +126,10 @@ fn hardcoded_signals() -> Vec<SignalDef> {
         ("P-INSTALL-SUID-SGID", Pkgbuild, 90, "Install script creates or changes a file with SUID/SGID mode", false),
         ("G-INSTALL-SUID", Pkgbuild, 70, "install with SUID/SGID mode bits", false),
         // shell_analysis
+        ("SA-PIPE-DOWNLOAD-EXEC", Pkgbuild, 95, "Downloaded data reaches an interpreter through a multi-stage pipeline, substitution, or wrapper", true),
+        ("SA-PIPE-DECODE-EXEC", Pkgbuild, 90, "Decoded data (base64/base32/xxd/openssl) is piped into an interpreter", true),
+        ("SA-EXFIL-PIPE", Pkgbuild, 95, "Credential material (SSH, cloud, kube, GPG, netrc) is read by or flows into a network sender", true),
+        ("SA-EVAL-SUBST-EXEC", Pkgbuild, 95, "eval, sh -c, here-string or process substitution executes a downloading or decoding substitution", true),
         ("SA-QUOTED-DOWNLOAD-EXEC", Pkgbuild, 90, "Quoted or escaped download-to-interpreter pipeline", true),
         ("SA-VAR-CONCAT-EXEC", Pkgbuild, 85, "Variable concatenation resolves to download-and-execute", true),
         ("SA-VAR-CONCAT-CMD", Pkgbuild, 55, "Variable concatenation resolves to dangerous command", false),
@@ -192,6 +199,7 @@ mod tests {
         assert_eq!(
             floored,
             vec![
+                ("B-JUNE-2026-COMPROMISED", Some(TierFloor::Sketchy)),
                 ("B-ORPHAN-TAKEOVER", Some(TierFloor::Ok)),
                 ("B-UNPROVEN-ADOPTION", Some(TierFloor::Ok)),
             ]
@@ -246,7 +254,26 @@ mod tests {
         };
 
         let defs = all_signal_definitions();
-        for signal in OrphanTakeoverAnalysis.analyze(&ctx) {
+        let listed = PackageContext {
+            name: "aws-cli-git".into(),
+            metadata: None,
+            pkgbuild_content: None,
+            install_script_content: None,
+            prior_pkgbuild_content: None,
+            git_log: vec![],
+            maintainer_packages: vec![],
+            github_stars: None,
+            github_not_found: false,
+            aur_comments: vec![],
+        };
+        let mut emitted = OrphanTakeoverAnalysis.analyze(&ctx);
+        emitted.extend(crate::features::known_compromised::KnownCompromised.analyze(&listed));
+        assert!(
+            emitted
+                .iter()
+                .any(|signal| signal.id == "B-JUNE-2026-COMPROMISED")
+        );
+        for signal in emitted {
             let def = defs
                 .iter()
                 .find(|d| d.id == signal.id)

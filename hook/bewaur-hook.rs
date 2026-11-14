@@ -221,14 +221,9 @@ fn main() {
         let _ = hook_io.flush();
 
         let meta = metadata.get(pkg.as_str()).cloned().unwrap();
-        let maint_pkgs = meta
-            .maintainer
-            .as_deref()
-            .and_then(|m| maintainer_packages.get(m))
-            .cloned()
-            .unwrap_or_default();
-
-        match bulk::clone_with_retry(pkg, meta, maint_pkgs) {
+        match bulk::maintainer_packages_for(&meta, &maintainer_packages)
+            .and_then(|maint_pkgs| bulk::clone_with_retry(pkg, meta, maint_pkgs))
+        {
             Ok(ctx) => {
                 let result = coordinator::run_scan_context_with_config(&ctx, &config);
                 let idx = match result.tier {

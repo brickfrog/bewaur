@@ -1,0 +1,3 @@
+min_tier=malicious
+required=P-REVSHELL-DEVTCP
+note=reverse shell with quote-split command and device path; scored TRUSTED before the quote-joined pattern view

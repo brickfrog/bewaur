@@ -58,12 +58,14 @@ pub fn build_context(package_name: &str) -> Result<ScanContext, String> {
         None
     };
 
-    // Fetch maintainer's other packages for reputation analysis
-    let maintainer_packages = metadata
-        .maintainer
-        .as_deref()
-        .and_then(|m| aur_rpc::fetch_maintainer_packages(m).ok())
-        .unwrap_or_default();
+    // Fetch maintainer's other packages for reputation analysis. A failed
+    // lookup is an incomplete scan, not an empty list: the adoption and
+    // reputation checks treat an empty list as "unknown" and would go quiet.
+    let maintainer_packages = match metadata.maintainer.as_deref() {
+        Some(maintainer) => crate::shared::bulk::fetch_maintainer_packages_with_retry(maintainer)
+            .map_err(|error| format!("maintainer package lookup for {maintainer} failed: {error}"))?,
+        None => Vec::new(),
+    };
 
     // Fetch GitHub stars if upstream URL points to GitHub
     let (github_stars, github_not_found) = metadata

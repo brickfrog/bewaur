@@ -43,6 +43,13 @@ fn packages_select_the_network_hook_by_capability() {
     assert!(SOURCE_PKGBUILD.contains("'zstd'"));
     assert!(SOURCE_PKGBUILD.contains("'pkgconf'"));
     assert!(SOURCE_PKGBUILD.contains("/usr/share/libalpm/hooks/bewaur.hook"));
+    assert!(SOURCE_PKGBUILD.contains("/usr/lib/systemd/user/bewaur-scan.service"));
+    assert!(SOURCE_PKGBUILD.contains("/usr/lib/systemd/user/bewaur-scan.timer"));
+    let service = include_str!("../hook/bewaur-scan.service");
+    assert!(
+        service.contains("ExecStart=/usr/bin/bewaur scan --all-installed --flagged-only --notify")
+    );
+    assert!(include_str!("../hook/bewaur-scan.timer").contains("OnCalendar=daily"));
     assert!(!SOURCE_PKGBUILD.contains("target/release/traur"));
     assert!(!SOURCE_PKGBUILD.contains("/usr/bin/traur"));
     assert!(!SOURCE_PKGBUILD.contains("/usr/share/libalpm/hooks/traur.hook"));

@@ -38,4 +38,6 @@ Both variants install to the destination name `bewaur.hook`.
 | Hook binary | `/usr/bin/bewaur-hook` |
 | ALPM hook | `/usr/share/libalpm/hooks/bewaur.hook` |
 | Pattern DB | `/usr/share/bewaur/patterns.toml` |
+| Scan service (user) | `/usr/lib/systemd/user/bewaur-scan.service` |
+| Scan timer (user, opt-in) | `/usr/lib/systemd/user/bewaur-scan.timer` |
 | License | `/usr/share/licenses/bewaur/LICENSE` |

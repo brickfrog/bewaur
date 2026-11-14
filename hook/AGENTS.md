@@ -8,6 +8,10 @@ ALPM (pacman) hook integration for automatic pre-install scanning.
 - `bewaur-network.hook` — variant for pacman builds that isolate hook networking;
   opts in with `NetworkAccess = allowed`
 - `bewaur-hook.rs` — Hook binary entry point, compiled as a separate binary
+- `bewaur-scan.service` / `bewaur-scan.timer` — opt-in daily *user* units
+  (`systemctl --user enable --now bewaur-scan.timer`) running
+  `bewaur scan --all-installed --flagged-only --notify`; installed to
+  `/usr/lib/systemd/user/`
 
 ## How it works
 

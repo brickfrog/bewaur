@@ -1,0 +1,3 @@
+min_tier=sketchy
+required=P-JUNE-2026-JS-IOC
+note=Atomic Arch campaign: build-time npm injection of atomic-lockfile. A bare IOC is deliberately SKETCHY (strict-gate blocking); MALICIOUS is reserved for the takeover+IOC composite B-RECENT-TAKEOVER-JUNE-2026-IOC

@@ -13,6 +13,8 @@ All checks are skipped for packages with `num_votes >= 10`. Established packages
   1. Levenshtein edit distance == 1 from a top popular package name (catches single-char typos like "pary"→"paru").
   2. Prefix/suffix containment — name starts or ends with a popular package name (catches "yay2", "2vim").
 
+  Legitimate variants are exempt from both: the popular name plus only known variant tokens (`vim-git`, `proton-ge-custom-bin`, `slack-desktop-wayland`) or a known binding prefix plus the name (`python-steam`, `lib32-mpv`). Edit distance is also checked after stripping variant suffixes (`pary-bin` → `pary`) for popular names of four or more characters.
+
 ## Signals emitted
 
 All signals use `SignalCategory::Behavioral` (weight 0.25).

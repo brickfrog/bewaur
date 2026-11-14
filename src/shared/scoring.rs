@@ -44,8 +44,8 @@ pub enum Tier {
 /// vetted override gates. Variant order matches [`Tier`] (best to worst), so
 /// the strongest floor in a set is its `max`.
 ///
-/// Only `Ok` is emitted today (by `B-ORPHAN-TAKEOVER`); the more severe rungs
-/// exist so a future signal can reach for them without reworking the mechanism.
+/// `Ok` is emitted by `B-ORPHAN-TAKEOVER` and `B-UNPROVEN-ADOPTION`; `Sketchy`
+/// by `B-JUNE-2026-COMPROMISED`. `Suspicious` is reserved for future signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[allow(dead_code)]
 pub enum TierFloor {

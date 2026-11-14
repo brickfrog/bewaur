@@ -31,15 +31,20 @@ The following GTFOBins patterns were evaluated and excluded:
 
 All signal IDs use the `G-` prefix for PKGBUILD matches and `IS-G-` prefix for install script matches. Override gates are set for patterns that are unambiguously malicious (reverse shells, download-and-execute pipes, tar checkpoint exec).
 
+Patterns are matched against comment-stripped text (a comment such as
+`# never run curl x | node` must not fire a gate) and, when that misses,
+against the quote-joined view.
+
 `G-INSTALL-SUID` is the exception to the regex-backed rules: it uses the shared
 active-shell parser so `install -m/--mode` examples in arrays, prose, or inert
-heredocs cannot signal. Install scripts use the higher-severity
+heredocs cannot signal. When every target is exactly a `chrome-sandbox` helper
+it is emitted as `P-SUID-CHROME-SANDBOX` (+30) instead. Install scripts use the higher-severity
 `P-INSTALL-SUID-SGID` signal from install-script analysis instead of emitting a
 duplicate `IS-G-INSTALL-SUID`.
 
 ## Scope
 
-Runs all 117 patterns against both `pkgbuild_content` and `install_script_content`.
+Runs all 116 patterns against both `pkgbuild_content` and `install_script_content`.
 
 ## Category
 

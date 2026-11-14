@@ -126,16 +126,10 @@ pub fn run(count: usize, jobs: usize) -> i32 {
             let name = &pkg.name;
 
             let result = if let Some(meta) = metadata.get(name).cloned() {
-                let maint_pkgs = meta
-                    .maintainer
-                    .as_deref()
-                    .and_then(|m| maintainer_packages.get(m))
-                    .cloned()
-                    .unwrap_or_default();
-
                 // Time clone separately from analysis
                 let t0 = Instant::now();
-                let ctx = clone_with_retry(name, meta, maint_pkgs);
+                let ctx = crate::shared::bulk::maintainer_packages_for(&meta, &maintainer_packages)
+                    .and_then(|maint_pkgs| clone_with_retry(name, meta, maint_pkgs));
                 clone_time_us.fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
 
                 match ctx {

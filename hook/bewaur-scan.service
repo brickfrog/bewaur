@@ -1,0 +1,13 @@
+[Unit]
+Description=Scan installed AUR packages with bewaur
+Documentation=https://github.com/brickfrog/bewaur
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# User unit: --notify needs the user's session bus. The exit status is non-zero
+# when a package is SUSPICIOUS or MALICIOUS or could not be scanned.
+ExecStart=/usr/bin/bewaur scan --all-installed --flagged-only --notify
+Nice=10
+IOSchedulingClass=idle

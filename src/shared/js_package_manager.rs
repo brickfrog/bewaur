@@ -136,22 +136,37 @@ fn analyze_content(
     }
 }
 
-/// Find an executable chmod/install that sets SUID or SGID. This uses the same
-/// active-shell view as package-manager detection, so arrays and inert heredoc
-/// data cannot turn a mode example into an install-time finding.
-pub fn find_privileged_chmod(content: &str) -> Option<String> {
-    find_privileged_mode_change(content, false)
+/// First executable chmod/install that sets SUID or SGID (test convenience
+/// over [`find_privileged_mode_changes`]).
+#[cfg(test)]
+fn find_privileged_chmod(content: &str) -> Option<String> {
+    find_privileged_mode_changes(content, false)
+        .into_iter()
+        .next()
+        .map(|change| change.matched_line)
 }
 
-/// Find specifically an executable `install` invocation with a privileged
-/// mode. This lets GTFOBins keep its PKGBUILD signal without a raw regex that
-/// also fires on prose and inert heredocs.
-pub fn find_privileged_install(content: &str) -> Option<String> {
-    find_privileged_mode_change(content, true)
+/// One active `chmod` or `install` invocation that sets SUID/SGID bits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivilegedModeChange {
+    pub matched_line: String,
+    /// The privileged mode as written (`4755`, `u+s`, ...).
+    pub mode: String,
+    /// Paths whose mode is changed: every `chmod` operand, or the `install`
+    /// destination.
+    pub targets: Vec<String>,
 }
 
-fn find_privileged_mode_change(content: &str, install_only: bool) -> Option<String> {
+/// Every active `chmod`/`install` that sets SUID or SGID, in source order.
+/// This uses the same active-shell view as package-manager detection, so
+/// arrays and inert heredoc data cannot turn a mode example into a finding.
+/// `install_only` restricts the search to `install -m`.
+pub fn find_privileged_mode_changes(
+    content: &str,
+    install_only: bool,
+) -> Vec<PrivilegedModeChange> {
     let masked = mask_shell_arrays(content);
+    let mut changes = Vec::new();
 
     for logical_line in executable_logical_lines(&masked) {
         for command in shell_command_segments(&logical_line) {
@@ -182,17 +197,43 @@ fn find_privileged_mode_change(content: &str, install_only: bool) -> Option<Stri
                     i += 1;
                 }
                 if i + 1 < command.len() && is_privileged_mode(&command[i]) {
-                    return Some(logical_line.trim().to_string());
+                    changes.push(PrivilegedModeChange {
+                        matched_line: logical_line.trim().to_string(),
+                        mode: command[i].clone(),
+                        targets: command[i + 1..].to_vec(),
+                    });
                 }
             } else if command_name == "install"
-                && privileged_install_mode(&command[executable + 1..]).is_some()
+                && let Some(mode) = privileged_install_mode(&command[executable + 1..])
             {
-                return Some(logical_line.trim().to_string());
+                changes.push(PrivilegedModeChange {
+                    matched_line: logical_line.trim().to_string(),
+                    mode: mode.to_string(),
+                    targets: command.last().into_iter().cloned().collect(),
+                });
             }
         }
     }
 
-    None
+    changes
+}
+
+/// Whether every privileged mode change targets an Electron/Chromium
+/// `chrome-sandbox` helper, which upstream requires to be SUID root when
+/// unprivileged user namespaces are unavailable. Only the exact basename and
+/// the documented `4755` mode qualify; globs, variables in the basename, other
+/// modes (SGID, group/world-writable), and mixed target lists do not. This
+/// lowers the signal's weight; it never removes the signal.
+pub fn privileged_changes_only_chrome_sandbox(changes: &[PrivilegedModeChange]) -> bool {
+    !changes.is_empty()
+        && changes.iter().all(|change| {
+            change.mode.trim_start_matches('0') == "4755"
+                && !change.targets.is_empty()
+                && change
+                    .targets
+                    .iter()
+                    .all(|target| target.rsplit('/').next() == Some("chrome-sandbox"))
+        })
 }
 
 fn privileged_install_mode(arguments: &[String]) -> Option<&str> {
@@ -208,12 +249,38 @@ fn privileged_install_mode(arguments: &[String]) -> Option<&str> {
                 .filter(|mode| is_privileged_mode(mode))
                 .map(String::as_str);
         }
-        if let Some(mode) = argument
-            .strip_prefix("--mode=")
-            .or_else(|| argument.strip_prefix("-m").filter(|mode| !mode.is_empty()))
-            && is_privileged_mode(mode)
+        if let Some(mode) = argument.strip_prefix("--mode=") {
+            if is_privileged_mode(mode) {
+                return Some(mode);
+            }
+            i += 1;
+            continue;
+        }
+        // Bundled short options: `-m4755`, `-Dm4755`, `-Dm 4755`. In GNU
+        // install, -g -o -m -S -t take an argument (attached or next word).
+        if let Some(bundle) = argument.strip_prefix('-')
+            && !bundle.starts_with('-')
         {
-            return Some(mode);
+            for (offset, flag) in bundle.char_indices() {
+                if !matches!(flag, 'g' | 'o' | 'm' | 'S' | 't') {
+                    continue;
+                }
+                let attached = &bundle[offset + flag.len_utf8()..];
+                if flag == 'm' {
+                    let mode = if attached.is_empty() {
+                        arguments.get(i + 1).map(String::as_str)
+                    } else {
+                        Some(attached)
+                    };
+                    if let Some(mode) = mode.filter(|mode| is_privileged_mode(mode)) {
+                        return Some(mode);
+                    }
+                }
+                if attached.is_empty() {
+                    i += 1;
+                }
+                break;
+            }
         }
         i += 1;
     }
@@ -1777,6 +1844,9 @@ optdepends+=('bun: optional JavaScript tooling')
             "install -m 4755 helper /usr/bin/helper",
             "install -m4755 helper /usr/bin/helper",
             "install --mode=004755 helper /usr/bin/helper",
+            "install -Dm4755 helper \"$pkgdir/usr/bin/helper\"",
+            "install -Dm 4755 helper /usr/bin/helper",
+            "install -o root -Dvm2755 helper /usr/bin/helper",
         ] {
             assert!(find_privileged_chmod(command).is_some(), "{command}");
         }
@@ -1786,6 +1856,9 @@ optdepends+=('bun: optional JavaScript tooling')
             "modes=('chmod 4755 /usr/bin/helper')",
             "cat <<'EOF'\nchmod 4755 /usr/bin/helper\nEOF",
             "cat <<'EOF'\ninstall -m 4755 helper /usr/bin/helper\nEOF",
+            "install -Dm755 helper \"$pkgdir/usr/bin/helper\"",
+            "install -Dm644 -t \"$pkgdir/usr/share/doc/x\" README",
+            "install -o 4755 -Dm755 helper /usr/bin/helper",
         ] {
             assert!(find_privileged_chmod(content).is_none(), "{content}");
         }

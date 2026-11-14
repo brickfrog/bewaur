@@ -1,0 +1,4 @@
+min_tier=malicious
+helpers=config.defaults
+required=SA-PIPE-DOWNLOAD-EXEC
+note=committed helper file executed at build time carries a download-decode-exec substitution

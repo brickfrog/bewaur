@@ -33,11 +33,12 @@ Each signal should populate `matched_line: Option<String>` with the exact trigge
 | `pkgbuild_diff_analysis` | PKGBUILD diff: new suspicious patterns, removed checksums, domain changes, rewrites | Temporal | 0.15 |
 | `github_stars` | GitHub upstream star count (zero, low, repo not found) | Metadata | 0.15 |
 | `aur_comments_analysis` | AUR comments scanning for security keywords | Metadata | 0.15 |
+| `known_compromised` | Name/base on the vendored June 2026 compromise list (Sketchy floor) | Behavioral | 0.25 |
 
 ## Adding a new feature
 
 1. Create a new directory under `src/features/`
 2. Add `mod.rs` implementing the `Feature` trait
-3. Add `CLAUDE.md` explaining what the feature detects
+3. Add `AGENTS.md` explaining what the feature detects
 4. Register the feature in `all_features()` in this module's `mod.rs`
 5. If using regex patterns, add them to `data/patterns.toml` under a section matching your feature name

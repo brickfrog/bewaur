@@ -81,9 +81,39 @@ override_gate = false
 
 [[pkgbuild_analysis]]
 id = "P-SSH-ACCESS"
-pattern = '~/\.ssh/|/home/[^/]+/\.ssh/'
+pattern = '(?:~|\$\{?HOME\}?|/root|/home/[^/\s]+)/\.ssh/'
 points = 75
 description = "Accessing SSH keys"
+override_gate = false
+
+[[pkgbuild_analysis]]
+id = "P-CLOUD-CRED-ACCESS"
+pattern = '(?:~|\$\{?HOME\}?|/root|/home/[^/\s]+)/\.(?:aws/(?:credentials|config)|docker/config\.json|kube/config|netrc|git-credentials|config/gh/hosts\.yml|config/gcloud/|azure/)'
+points = 70
+description = "Accessing cloud or service credential stores (.aws, .docker, .kube, .netrc, gh, gcloud, azure)"
+override_gate = false
+
+[[pkgbuild_analysis]]
+id = "P-KERNEL-MODULE-MODPROBE"
+pattern = '\bmodprobe\s+(?:-\S+\s+)*[A-Za-z0-9_-]+(?:\s|$|;|\||&)'
+points = 25
+description = "Loading a kernel module by name"
+override_gate = false
+
+[[pkgbuild_analysis]]
+id = "P-NPM-REMOTE-TARBALL"
+pattern = '\b(?:npm|bun|yarn|pnpm)\s+(?:install|i|add)\b[^\n]*https?://'
+points = 80
+description = "JS package manager installs from a remote URL (payload outside source=())"
+override_gate = false
+
+[[pkgbuild_analysis]]
+id = "P-EBPF-PROG-LOAD"
+# Deliberately narrow: kprobe/uprobe/perf_event_open/libbpf alone appear in
+# ordinary bcc/bpftrace tooling PKGBUILDs.
+pattern = '\bBPF_PROG_LOAD\b|\bbpftool\s+prog\s+(?:load|loadall|attach)\b|#include\s*<bpf/libbpf\.h>'
+points = 60
+description = "Loads or attaches an eBPF program (kernel-level rootkit technique)"
 override_gate = false
 
 [[pkgbuild_analysis]]
@@ -109,7 +139,10 @@ override_gate = false
 
 [[pkgbuild_analysis]]
 id = "P-SYSTEMD-CREATE"
-pattern = 'install.*\.service.*systemd|systemctl\s+enable'
+# Shipping a unit under $pkgdir/usr/lib/systemd/{system,user} is ordinary
+# packaging and is deliberately not matched. Enabling a unit, or installing one
+# into /etc/systemd or a user's home unit directory, still is.
+pattern = 'systemctl\s+(?:-\S+\s+)*enable\b|install\b[^\n]*\.service[^\n]*(?:/etc/systemd/|\.config/systemd/|\.local/share/systemd/)'
 points = 35
 description = "Creating/enabling systemd service"
 override_gate = false
@@ -327,7 +360,9 @@ override_gate = false
 # Kernel module / rootkit
 [[pkgbuild_analysis]]
 id = "P-KERNEL-MODULE-LOAD"
-pattern = '(insmod|modprobe)\s+[^-]'
+# Loading a module from a file path. Loading an in-tree module by name is the
+# weaker P-KERNEL-MODULE-MODPROBE.
+pattern = '\binsmod\s+(?:-\S+\s+)*[^-\s]|\bmodprobe\s+(?:-\S+\s+)*\S*(?:/|\.ko\b)'
 points = 50
 description = "Kernel module loading (potential rootkit)"
 override_gate = false
@@ -648,9 +683,37 @@ override_gate = false
 
 [[install_script_analysis]]
 id = "P-INSTALL-SSH-ACCESS"
-pattern = '~/\.ssh/|/home/[^/]+/\.ssh/'
+pattern = '(?:~|\$\{?HOME\}?|/root|/home/[^/\s]+)/\.ssh/'
 points = 80
 description = "Accessing SSH keys from install script"
+override_gate = false
+
+[[install_script_analysis]]
+id = "P-INSTALL-CLOUD-CRED-ACCESS"
+pattern = '(?:~|\$\{?HOME\}?|/root|/home/[^/\s]+)/\.(?:aws/(?:credentials|config)|docker/config\.json|kube/config|netrc|git-credentials|config/gh/hosts\.yml|config/gcloud/|azure/)'
+points = 75
+description = "Accessing cloud or service credential stores from install script"
+override_gate = false
+
+[[install_script_analysis]]
+id = "P-INSTALL-MODPROBE"
+pattern = '\bmodprobe\s+(?:-\S+\s+)*[A-Za-z0-9_-]+(?:\s|$|;|\||&)'
+points = 30
+description = "Loading a kernel module by name in install script"
+override_gate = false
+
+[[install_script_analysis]]
+id = "P-INSTALL-NPM-REMOTE-TARBALL"
+pattern = '\b(?:npm|bun|yarn|pnpm)\s+(?:install|i|add)\b[^\n]*https?://'
+points = 90
+description = "JS package manager installs from a remote URL in install script"
+override_gate = false
+
+[[install_script_analysis]]
+id = "P-INSTALL-EBPF-PROG-LOAD"
+pattern = '\bBPF_PROG_LOAD\b|\bbpftool\s+prog\s+(?:load|loadall|attach)\b|/sys/fs/bpf/'
+points = 80
+description = "Loads, attaches or pins an eBPF program from install script"
 override_gate = false
 
 [[install_script_analysis]]
@@ -732,7 +795,7 @@ override_gate = false
 
 [[install_script_analysis]]
 id = "P-INSTALL-KERNEL-MOD"
-pattern = '(insmod|modprobe)\s+[^-]'
+pattern = '\binsmod\s+(?:-\S+\s+)*[^-\s]|\bmodprobe\s+(?:-\S+\s+)*\S*(?:/|\.ko\b)'
 points = 70
 description = "Kernel module loading in install script"
 override_gate = false
@@ -1297,7 +1360,7 @@ override_gate = false
 
 [[gtfobins_analysis]]
 id = "G-DOWNLOAD-NODE"
-pattern = 'node\s+.*(-e|--eval)\s.*\bhttp\b.*\bget\b|npm\s+exec\s|npx\s+\S'
+pattern = 'node\s+.*(-e|--eval)\s.*\bhttp\b.*\bget\b|\bnpm\s+exec\s|\bnpx\s+\S'
 points = 50
 description = "Node.js HTTP download or npx remote execution"
 override_gate = false

@@ -1,0 +1,3 @@
+min_tier=malicious
+required=IS-SA-EXFIL-PIPE
+note=credential archive from .install piped through base64 into curl; scored SKETCHY 55 before pipeline composition

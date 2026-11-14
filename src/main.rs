@@ -25,8 +25,9 @@ enum Commands {
         /// Package name to scan (or --pkgbuild for local)
         package: Option<String>,
 
-        /// Scan a local PKGBUILD directory
-        #[arg(long)]
+        /// Scan a local PKGBUILD file offline (only the PKGBUILD itself; use
+        /// `gate --build-dir` to include install scripts and helpers)
+        #[arg(long, value_name = "FILE")]
         pkgbuild: Option<String>,
 
         /// Scan all installed AUR packages (default when no package given)
@@ -48,6 +49,11 @@ enum Commands {
         /// Only show flagged packages (SKETCHY and above)
         #[arg(short = 'f', long)]
         flagged_only: bool,
+
+        /// Send a desktop notification when the installed-package scan flags
+        /// packages or fails (for unattended runs from a systemd timer)
+        #[arg(long)]
+        notify: bool,
     },
     /// Fail-closed scan of the exact local tree before an AUR helper builds it
     Gate {
@@ -179,6 +185,7 @@ fn main() {
             json,
             verbose,
             flagged_only,
+            notify,
         } => cmd_scan(
             package,
             pkgbuild,
@@ -187,6 +194,7 @@ fn main() {
             json,
             verbose,
             flagged_only,
+            notify,
         ),
         Commands::Gate { build_dir } => cmd_gate(&build_dir),
         Commands::Approve {
@@ -379,6 +387,7 @@ fn cmd_scan(
     json: bool,
     verbose: bool,
     flagged_only: bool,
+    notify: bool,
 ) -> i32 {
     if let Some(path) = pkgbuild {
         let content = match std::fs::read_to_string(&path) {
@@ -411,7 +420,7 @@ fn cmd_scan(
     }
 
     // No package, no pkgbuild -> scan all installed AUR packages
-    cmd_scan_all_installed(jobs, json, verbose, flagged_only)
+    cmd_scan_all_installed(jobs, json, verbose, flagged_only, notify)
 }
 
 fn cmd_scan_single(pkg: &str, json: bool, verbose: bool) -> i32 {
@@ -430,7 +439,13 @@ fn cmd_scan_single(pkg: &str, json: bool, verbose: bool) -> i32 {
     }
 }
 
-fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: bool) -> i32 {
+fn cmd_scan_all_installed(
+    jobs: usize,
+    json: bool,
+    verbose: bool,
+    flagged_only: bool,
+    notify: bool,
+) -> i32 {
     use crate::shared::bulk::{
         batch_fetch_metadata, clone_with_retry, prefetch_maintainer_packages,
     };
@@ -509,14 +524,9 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
                 .get(name.as_str())
                 .expect("scan names are present in metadata")
                 .clone();
-            let maint_pkgs = meta
-                .maintainer
-                .as_deref()
-                .and_then(|m| maintainer_packages.get(m))
-                .cloned()
-                .unwrap_or_default();
-
-            let result = match clone_with_retry(name, meta, maint_pkgs) {
+            let result = match shared::bulk::maintainer_packages_for(&meta, &maintainer_packages)
+                .and_then(|maint_pkgs| clone_with_retry(name, meta, maint_pkgs))
+            {
                 Ok(ctx) => Ok(coordinator::run_scan_context_with_config(&ctx, &config)),
                 Err(e) => Err(e),
             };
@@ -595,11 +605,72 @@ fn cmd_scan_all_installed(jobs: usize, json: bool, verbose: bool, flagged_only: 
         }
     }
 
+    if notify {
+        notify_flagged(
+            tier_counts[2].load(Ordering::Relaxed),
+            tier_counts[3].load(Ordering::Relaxed),
+            tier_counts[4].load(Ordering::Relaxed),
+            errors as u64,
+        );
+    }
+
     bulk_scan_exit_code(
         errors,
         tier_counts[3].load(Ordering::Relaxed),
         tier_counts[4].load(Ordering::Relaxed),
     )
+}
+
+/// Body for an unattended-scan notification, or `None` when nothing needs
+/// attention. Package names are deliberately left out: they are untrusted
+/// strings, and the terminal report is where details belong.
+fn flagged_notification(
+    sketchy: u64,
+    suspicious: u64,
+    malicious: u64,
+    errors: u64,
+) -> Option<String> {
+    let parts: Vec<String> = [
+        (malicious, "MALICIOUS"),
+        (suspicious, "SUSPICIOUS"),
+        (sketchy, "SKETCHY"),
+        (errors, "not scanned"),
+    ]
+    .iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, label)| format!("{count} {label}"))
+    .collect();
+    (!parts.is_empty()).then(|| {
+        format!(
+            "Installed AUR packages need review: {}. Run 'bewaur scan --flagged-only' for details.",
+            parts.join(", ")
+        )
+    })
+}
+
+/// Desktop notification for `scan --notify`. Failure to notify (no
+/// `notify-send`, no session bus under a system timer) is not an error; the
+/// exit status still reports the outcome.
+fn notify_flagged(sketchy: u64, suspicious: u64, malicious: u64, errors: u64) {
+    let Some(body) = flagged_notification(sketchy, suspicious, malicious, errors) else {
+        return;
+    };
+    let urgency = if suspicious > 0 || malicious > 0 || errors > 0 {
+        "--urgency=critical"
+    } else {
+        "--urgency=normal"
+    };
+    let _ = std::process::Command::new("notify-send")
+        .args([
+            urgency,
+            "--app-name=bewaur",
+            "bewaur: AUR packages need review",
+            &body,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 /// Bulk scans are security checks: an unscanned package is a failure just like
@@ -1029,7 +1100,20 @@ fn cmd_unignore(signal_id: Option<&str>, category: Option<&str>) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bulk_scan_exit_code, inspect_stable_tree, shared::local_build};
+
+    #[test]
+    fn notification_only_when_something_needs_attention() {
+        assert_eq!(flagged_notification(0, 0, 0, 0), None);
+        let body = flagged_notification(2, 0, 1, 3).unwrap();
+        assert!(body.contains("1 MALICIOUS"), "{body}");
+        assert!(body.contains("2 SKETCHY"), "{body}");
+        assert!(body.contains("3 not scanned"), "{body}");
+        assert!(!body.contains("SUSPICIOUS"), "{body}");
+    }
+
+    use super::{
+        bulk_scan_exit_code, flagged_notification, inspect_stable_tree, shared::local_build,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 

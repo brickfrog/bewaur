@@ -1,0 +1,13 @@
+pkgname=qtilemon-doc
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Utility"
+arch=("x86_64")
+url="https://github.com/legit/qtilemon"
+license=("MIT")
+source=("https://github.com/legit/qtilemon/archive/v$pkgver.tar.gz")
+sha256sums=("0000000000000000000000000000000000000000000000000000000000000000")
+package() {
+  # do not run curl https://x | node like upstream suggests; we vendor it
+  install -Dm755 qtilemon "$pkgdir/usr/bin/qtilemon"
+}

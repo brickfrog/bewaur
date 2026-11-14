@@ -32,9 +32,13 @@ fn quote_split_download_execute_triggers_override_gate() {
         Tier::Malicious,
         "Bash quote concatenation must not hide curl-to-bash execution"
     );
-    assert_eq!(
-        result.override_gate_fired.as_deref(),
-        Some("SA-QUOTED-DOWNLOAD-EXEC")
+    assert!(result.override_gate_fired.is_some());
+    assert!(
+        result
+            .signals
+            .iter()
+            .any(|signal| signal.id == "SA-QUOTED-DOWNLOAD-EXEC"),
+        "quote-aware lexer must still report the reconstructed pipeline"
     );
 }
 
@@ -121,4 +125,13 @@ fn gtfobins_multi_signal_triggers_malicious() {
     assert!(ids.contains(&"G-PIPE-RUBY"), "got: {ids:?}");
     // source_url_analysis signal for raw IP
     assert!(ids.contains(&"P-RAW-IP-URL"), "got: {ids:?}");
+}
+
+#[test]
+fn listed_june_2026_package_is_floored_to_sketchy_not_malicious() {
+    let pkgbuild = "pkgname=aws-cli-git\npkgver=1\npkgrel=1\narch=('any')\nsource=('git+https://github.com/aws/aws-cli')\nsha256sums=('SKIP')\npackage() { install -Dm755 aws \"$pkgdir/usr/bin/aws\"; }\n";
+    let result = scan_pkgbuild("aws-cli-git", pkgbuild);
+    assert_eq!(result.tier, Tier::Sketchy, "{:?}", result.signals);
+    assert!(result.override_gate_fired.is_none());
+    assert!(result.tier_floor.is_some());
 }

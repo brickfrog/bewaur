@@ -1,0 +1,3 @@
+min_tier=malicious
+required=SA-PIPE-DOWNLOAD-EXEC
+note=download-decode-exec under a neutral name; passed the gate at OK 62 before pipeline composition

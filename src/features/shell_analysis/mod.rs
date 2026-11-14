@@ -183,6 +183,7 @@ fn analyze_content(content: &str, id_prefix: &str, desc_suffix: &str) -> Vec<Sig
     signals.extend(analyze_data_blobs(content));
     signals.extend(analyze_binary_download(content));
     signals.extend(analyze_obfuscated_download_execute(content));
+    signals.extend(analyze_compositions(content));
 
     if !id_prefix.is_empty() {
         for sig in &mut signals {
@@ -217,6 +218,54 @@ fn analyze_obfuscated_download_execute(content: &str) -> Vec<Signal> {
             .map(|line| line.trim().to_string()),
         min_tier: None,
     }]
+}
+
+/// Cross-stage behaviours: download or decode flowing into an interpreter
+/// through any number of stages, credential material reaching a network
+/// sender, and executed command substitutions that download or decode. All
+/// are override gates: none has a legitimate packaging use.
+fn analyze_compositions(content: &str) -> Vec<Signal> {
+    use crate::shared::shell_syntax::CompositionKind;
+
+    crate::shared::shell_syntax::find_compositions(content)
+        .into_iter()
+        .map(|finding| {
+            let (id, points, what) = match finding.kind {
+                CompositionKind::DownloadExecute => (
+                    "SA-PIPE-DOWNLOAD-EXEC",
+                    95,
+                    "downloaded data flows into an interpreter",
+                ),
+                CompositionKind::DecodeExecute => (
+                    "SA-PIPE-DECODE-EXEC",
+                    90,
+                    "decoded data flows into an interpreter",
+                ),
+                CompositionKind::CredentialExfiltration => (
+                    "SA-EXFIL-PIPE",
+                    95,
+                    "credential material flows into a network sender",
+                ),
+                CompositionKind::SubstitutionExecute => (
+                    "SA-EVAL-SUBST-EXEC",
+                    95,
+                    "a downloading or decoding command substitution is executed",
+                ),
+            };
+            Signal {
+                id: id.to_string(),
+                category: SignalCategory::Pkgbuild,
+                points,
+                description: format!("{what}: '{}' (line {})", finding.chain, finding.line),
+                is_override_gate: true,
+                matched_line: content
+                    .lines()
+                    .nth(finding.line.saturating_sub(1))
+                    .map(|line| line.trim().to_string()),
+                min_tier: None,
+            }
+        })
+        .collect()
 }
 
 // --- Helpers ---

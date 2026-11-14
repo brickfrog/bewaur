@@ -11,7 +11,8 @@ Analyzes `.install` files (pre/post install/upgrade/remove hooks) for suspicious
 - **Profile modification**: Writing to .bashrc/.zshrc during install
 - **Credential access**: SSH keys, browser profiles, GPG keyring, /etc/passwd access
 - **Privilege escalation**: sudoers modification
-- **Privileged file modes**: active `chmod` or `install -m/--mode` setting SUID or SGID, symbolically or numerically
+- **Privileged file modes**: active `chmod` or `install -m/--mode` (including bundled `-Dm4755`) setting SUID or SGID, symbolically or numerically. When every target is exactly a `chrome-sandbox` helper the lower `P-INSTALL-SUID-CHROME-SANDBOX` (+30) is emitted instead of `P-INSTALL-SUID-SGID` (+90)
+- **Cloud credentials, remote JS tarballs, eBPF loading, named `modprobe`**: `P-INSTALL-CLOUD-CRED-ACCESS`, `P-INSTALL-NPM-REMOTE-TARBALL`, `P-INSTALL-EBPF-PROG-LOAD`, `P-INSTALL-MODPROBE` (+30; loading a module file is `P-INSTALL-KERNEL-MOD`)
 - **Language package fetches**: named npm, pnpm, yarn, or bun installs; bare and local installs are excluded
 - **Anti-forensics**: history clearing, log clearing/truncation
 - **Obfuscation**: base64 decoding, eval in install scripts
@@ -39,3 +40,5 @@ through the shared active-shell parser; the remaining rules are in the
 Patterns are compiled once via `OnceLock` and reused across invocations.
 Shared comment stripping preserves Bash parameter expansions such as `${#value}`
 so a length expression cannot hide executable install code later on the line.
+Patterns are also matched against the quote-joined view (see
+`pkgbuild_analysis/AGENTS.md`).

@@ -29,7 +29,7 @@ trust = 100 - risk
 
 Tiers: TRUSTED (81-100), OK (61-80), SKETCHY (41-60), SUSPICIOUS (21-40), MALICIOUS (0-20).
 
-Override gates: 47 signals across download-and-execute, reverse shells, GTFOBins binary abuse, and variable-concatenated exec escalate directly to MALICIOUS.
+Override gates: 54 signals (47 patterns plus 7 hardcoded) across download-and-execute, reverse shells, GTFOBins binary abuse, variable-concatenated exec, multi-stage pipeline and command-substitution compositions, credential exfiltration, and the takeover+IOC composite escalate directly to MALICIOUS.
 
 Tier floors are a separate, weaker mechanism: a signal may declare the
 least-severe tier it will permit (`Signal.min_tier`), applied after the score is
@@ -37,7 +37,10 @@ computed. A floor can only raise severity, never lower it, and cannot reach
 MALICIOUS — that verdict stays exclusive to override gates. Floors exist because
 each category is capped at 100 before weighting, so behavioral signals alone can
 contribute at most `0.25 * 100 = 25` risk and can never leave the TRUSTED band
-on score alone. `B-ORPHAN-TAKEOVER` carries an `Ok` floor.
+on score alone. `B-ORPHAN-TAKEOVER` and `B-UNPROVEN-ADOPTION` carry an `Ok`
+floor; `B-JUNE-2026-COMPROMISED` (package on the vendored June 2026 compromise
+list) carries a `Sketchy` floor, so the strict gate blocks until the exact tree
+is reviewed, without claiming MALICIOUS.
 
 Override gates and tier floors are computed from the *unfiltered* signal set, so
 `bewaur ignore` suppresses a signal's points and its report row but can never
@@ -66,7 +69,7 @@ HTTPS remotes. HTTPS is acceptable only for web and download metadata.
 
 ## Adding a new feature
 
-1. Create `src/features/your_feature/` with `mod.rs` and `CLAUDE.md`
+1. Create `src/features/your_feature/` with `mod.rs` and `AGENTS.md`
 2. Implement the `Feature` trait (return `Vec<Signal>` from `analyze()`)
 3. Register in `src/features/mod.rs` (`all_features()`)
 4. If pattern-based, add rules to `data/patterns.toml`
@@ -94,7 +97,7 @@ prebuilt binary-release package.
 | `src/shared/bulk.rs` | Batch metadata fetch, maintainer prefetch, clone-with-retry |
 | `src/features/orphan_takeover_analysis/` | Submitter != maintainer detection, orphan takeover composite signal |
 | `src/features/shell_analysis/` | Beyond-regex static analysis (var concat, indirect exec, char-by-char, data blobs, binary download) |
-| `src/features/gtfobins_analysis/` | GTFOBins-derived patterns (117 patterns for legitimate binary abuse) |
+| `src/features/gtfobins_analysis/` | GTFOBins-derived patterns (116 patterns for legitimate binary abuse) |
 | `src/features/bin_source_verification/` | -bin package source domain vs upstream URL mismatch detection |
 | `src/features/pkgbuild_diff_analysis/` | PKGBUILD diff checking: new suspicious patterns, removed checksums, domain changes, major rewrites |
 | `src/features/github_stars/` | GitHub stars checking: zero/low stars, repo not found |
@@ -105,10 +108,15 @@ prebuilt binary-release package.
 | `src/shared/signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) |
 | `src/shared/config.rs` | Strict, locked, atomic user config: exact-tree approvals, explicit permanent allowances, ignored signals/categories |
 | `src/artifact.rs` | Bounded, non-extracting ALPM archive validation, identity checks, install-script scan, and artifact findings |
-| `data/patterns.toml` | Regex pattern database (239 patterns). Total signals: 279 (pattern + hardcoded) |
+| `data/patterns.toml` | Regex pattern database (246 patterns). Total signals: 303 (pattern + hardcoded) |
+| `data/june-2026-compromised.txt` | Vendored snapshot of the public June 2026 AUR compromise list (compiled in, never fetched at scan time) |
+| `src/shared/shell_syntax.rs` | Non-executing shell lexer: comment stripping, quote-fragment joining, and pipeline/substitution composition detection |
+| `src/features/known_compromised/` | June 2026 compromise-list membership (Sketchy floor) |
+| `tests/corpus/`, `tests/corpus_cases.rs` | Offline corpus: real benign AUR packages (false-positive budget, must stay ≤ OK) and incident-derived malicious samples (recall floor) |
 | `src/bench.rs` | Batch benchmark (parallel scan, retry, stats) |
 | `hook/bewaur.hook` | ALPM hook definition |
 | `hook/bewaur-network.hook` | Network opt-in hook for pacman builds that isolate hooks |
+| `hook/bewaur-scan.{service,timer}` | Opt-in daily user timer: `scan --all-installed --flagged-only --notify` |
 | `hook/bewaur-hook.rs` | Hook binary (filters AUR pkgs, runs scans) |
 
 ## Pre-build gate

@@ -24,10 +24,10 @@ override_gate = true  # optional, default false
 
 ### Pattern categories
 
-- **pkgbuild_analysis** (84 patterns): download-and-execute, reverse shells (bash/python/perl/ruby/awk/lua/php/nc/socat), shell obfuscation ($IFS, ANSI-C hex, ROT13, octal, string reversal), encoding bypasses (base64/base32/xxd/openssl), credential theft, persistence (systemd/cron/XDG autostart/udev/at jobs/PROMPT_COMMAND/.bash_logout), privilege escalation (SUID/sudoers/polkit/capabilities), anti-forensics (history/log clearing), C2/exfiltration, crypto mining, download-chmod-execute, /tmp staging, process hiding, system recon, kernel modules, pacman hooks, alias overrides
-- **install_script_analysis** (27 patterns): curl/wget in install, pipe to shell, persistence, credential access, obfuscation ($IFS, ANSI-C hex, ROT13), base64, eval, nohup, /tmp exec, chmod+exec, Python RCE, output suppression, crypto mining, kernel modules, env tokens, anti-forensics (history/log clearing), sudoers modification, PROMPT_COMMAND injection, XDG autostart
+- **pkgbuild_analysis** (88 patterns): download-and-execute, reverse shells (bash/python/perl/ruby/awk/lua/php/nc/socat), shell obfuscation ($IFS, ANSI-C hex, ROT13, octal, string reversal), encoding bypasses (base64/base32/xxd/openssl), credential theft, persistence (systemd/cron/XDG autostart/udev/at jobs/PROMPT_COMMAND/.bash_logout), privilege escalation (SUID/sudoers/polkit/capabilities), anti-forensics (history/log clearing), C2/exfiltration, crypto mining, download-chmod-execute, /tmp staging, process hiding, system recon, kernel modules (file loads vs. named `modprobe`), pacman hooks, alias overrides, cloud credential stores, JS remote tarballs, eBPF program loading
+- **install_script_analysis** (31 patterns): curl/wget in install, pipe to shell, persistence, credential access, obfuscation ($IFS, ANSI-C hex, ROT13), base64, eval, nohup, /tmp exec, chmod+exec, Python RCE, output suppression, crypto mining, kernel modules, env tokens, anti-forensics (history/log clearing), sudoers modification, PROMPT_COMMAND injection, XDG autostart, cloud credential stores, named `modprobe`, JS remote tarballs, eBPF load/attach/pin
 - **source_url_analysis** (11 patterns): raw IP, URL shortener, Discord webhook, pastebin, dynamic DNS, Telegram bot, tunnel service, HTTP source, ephemeral file hosting, Tor hidden service, MEGA
-- **gtfobins_analysis** (117 patterns): reverse/bind shells via Node.js/Julia/Tcl/Java/Go/OpenSSL, pipe-to-interpreter (node/ruby/php/lua/tclsh/R/julia/awk/jjs/ksh/csh/zsh/fish/dash), tar checkpoint, zip -TT, vim shell escape, gdb batch, expect spawn, nsenter, capsh, unshare, nmap, SSH ProxyCommand, pkexec, docker/podman, systemd-run, strace, screen, tmux, find/xargs/sed/cpio, cmake, psql, dotnet, tcpdump, nano, ed, m4, ip netns, gcc wrapper
+- **gtfobins_analysis** (116 patterns): reverse/bind shells via Node.js/Julia/Tcl/Java/Go/OpenSSL, pipe-to-interpreter (node/ruby/php/lua/tclsh/R/julia/awk/jjs/ksh/csh/zsh/fish/dash), tar checkpoint, zip -TT, vim shell escape, gdb batch, expect spawn, nsenter, capsh, unshare, nmap, SSH ProxyCommand, pkexec, docker/podman, systemd-run, strace, screen, tmux, find/xargs/sed/cpio, cmake, psql, dotnet, tcpdump, nano, ed, m4, ip netns, gcc wrapper
 
 ### Adding a new pattern
 
@@ -35,3 +35,15 @@ override_gate = true  # optional, default false
 2. Use a descriptive `id` following the convention: `P-*` for Pkgbuild, `B-*` for Behavioral, etc.
 3. Test the regex against known malicious and benign PKGBUILDs
 4. Set `override_gate = true` only for patterns with near-zero false positive rates
+5. Run `cargo test --test corpus_cases` — no benign corpus package may exceed its `max_tier`
+
+Patterns are matched against comment-stripped text and, when that misses, a
+quote-joined view (`ba""sh` → `bash`), so a rule needs no quote-splitting
+alternations of its own.
+
+## june-2026-compromised.txt
+
+Vendored snapshot of the public June 2026 AUR compromise list (source URL and
+fetch date in the header), compiled into `known_compromised` with
+`include_str!`. One AUR name per line; `#` lines are comments. It is never
+fetched at scan time.
