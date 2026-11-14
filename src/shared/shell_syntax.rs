@@ -518,7 +518,9 @@ fn wrapper_option(kind: WrapperKind, option: &str) -> WrapperOption {
             "-n" | "--adjustment" => WrapperOption::Value,
             option
                 if option.starts_with("--adjustment=")
-                    || option[1..].chars().all(|ch| ch.is_ascii_digit() || ch == '-') =>
+                    || option[1..]
+                        .chars()
+                        .all(|ch| ch.is_ascii_digit() || ch == '-') =>
             {
                 WrapperOption::InlineValue
             }
@@ -607,9 +609,9 @@ fn contains_executable_command_inner(content: &str, commands: &[&str], depth: us
         }
     }
 
-    heredoc_bodies.into_iter().any(|body| {
-        contains_executable_command_inner(&body.content, commands, depth + 1)
-    })
+    heredoc_bodies
+        .into_iter()
+        .any(|body| contains_executable_command_inner(&body.content, commands, depth + 1))
 }
 
 fn command_matches_marker(command: &ResolvedCommand, marker: &str) -> bool {
@@ -819,7 +821,10 @@ fn interpreter_consumes_stdin(command: &ResolvedCommand) -> bool {
                 return false;
             }
             if !long.contains('=')
-                && matches!(long, "rcfile" | "init-file" | "require" | "import" | "loader")
+                && matches!(
+                    long,
+                    "rcfile" | "init-file" | "require" | "import" | "loader"
+                )
             {
                 i += 1;
             }
@@ -2123,8 +2128,7 @@ mod tests {
 
     #[test]
     fn parameter_length_hash_is_not_treated_as_a_comment() {
-        let input =
-            "value=${#value}; python -c 'print(1)'\n{ # real comment\nfoo{#literal-word\n";
+        let input = "value=${#value}; python -c 'print(1)'\n{ # real comment\nfoo{#literal-word\n";
         assert_eq!(
             strip_comments(input),
             "value=${#value}; python -c 'print(1)'\n{ \nfoo{#literal-word\n"
@@ -2172,7 +2176,11 @@ mod tests {
             "curl -s u |& bash",
             "curl -s \"https://x/?a|b\" | bash",
         ] {
-            assert_eq!(kinds(content), vec![CompositionKind::DownloadExecute], "{content}");
+            assert_eq!(
+                kinds(content),
+                vec![CompositionKind::DownloadExecute],
+                "{content}"
+            );
         }
     }
 
@@ -2363,4 +2371,3 @@ mod tests {
         );
     }
 }
-

@@ -6,22 +6,8 @@ use strsim::levenshtein;
 
 /// Suspicious suffixes that indicate impersonation attempts.
 const IMPERSONATION_SUFFIXES: &[&str] = &[
-    "-fix",
-    "-fixed",
-    "-patch",
-    "-patched",
-    "-updated",
-    "-secure",
-    "-plus",
-    "-mod",
-    "-modded",
-    "-pro",
-    "-premium",
-    "-free",
-    "-cracked",
-    "-hack",
-    "-custom",
-    "-lite",
+    "-fix", "-fixed", "-patch", "-patched", "-updated", "-secure", "-plus", "-mod", "-modded",
+    "-pro", "-premium", "-free", "-cracked", "-hack", "-custom", "-lite",
 ];
 
 /// Popular brand names commonly targeted for impersonation.
@@ -253,9 +239,7 @@ impl Feature for NameAnalysis {
                     id: "B-TYPOSQUAT".to_string(),
                     category: SignalCategory::Behavioral,
                     points: 55,
-                    description: format!(
-                        "Name '{name}' embeds popular package '{top}'"
-                    ),
+                    description: format!("Name '{name}' embeds popular package '{top}'"),
                     is_override_gate: false,
                     matched_line: None,
                     min_tier: None,
@@ -285,7 +269,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        NameAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        NameAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn analyze_with_votes(name: &str, votes: u32) -> Vec<String> {
@@ -314,7 +302,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        NameAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        NameAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -331,7 +323,10 @@ mod tests {
     #[test]
     fn typosquat_edit_distance() {
         assert!(has(&analyze("pary"), "B-TYPOSQUAT")); // 1 edit from "paru"
-        assert!(!has(&analyze("rad"), "B-TYPOSQUAT"), "2 edits from 'yay', should not flag");
+        assert!(
+            !has(&analyze("rad"), "B-TYPOSQUAT"),
+            "2 edits from 'yay', should not flag"
+        );
     }
 
     #[test]
@@ -341,7 +336,10 @@ mod tests {
         assert!(has(&analyze("yay-bin2"), "B-TYPOSQUAT")); // prefix, unknown variant
         assert!(has(&analyze("yay-helper"), "B-TYPOSQUAT")); // prefix, not a variant
         assert!(has(&analyze("pary-bin"), "B-TYPOSQUAT")); // typo behind a variant suffix
-        assert!(!has(&analyze("myay-bin"), "B-TYPOSQUAT"), "No prefix/suffix match");
+        assert!(
+            !has(&analyze("myay-bin"), "B-TYPOSQUAT"),
+            "No prefix/suffix match"
+        );
     }
 
     #[test]
@@ -365,14 +363,20 @@ mod tests {
 
     #[test]
     fn exact_match_no_typosquat() {
-        assert!(!has(&analyze("yay"), "B-TYPOSQUAT"), "Exact match should not flag");
+        assert!(
+            !has(&analyze("yay"), "B-TYPOSQUAT"),
+            "Exact match should not flag"
+        );
         assert!(!has(&analyze("firefox"), "B-TYPOSQUAT"));
     }
 
     #[test]
     fn normal_name_no_signals() {
         let ids = analyze("my-custom-tool");
-        assert!(ids.is_empty(), "Normal name should trigger no signals, got: {ids:?}");
+        assert!(
+            ids.is_empty(),
+            "Normal name should trigger no signals, got: {ids:?}"
+        );
     }
 
     #[test]
@@ -388,7 +392,10 @@ mod tests {
     #[test]
     fn new_packages_still_checked() {
         assert!(has(&analyze_with_votes("pary", 0), "B-TYPOSQUAT"));
-        assert!(has(&analyze_with_votes("firefox-fix", 0), "B-NAME-IMPERSONATE"));
+        assert!(has(
+            &analyze_with_votes("firefox-fix", 0),
+            "B-NAME-IMPERSONATE"
+        ));
         assert!(has(&analyze_with_votes("yay2", 0), "B-TYPOSQUAT"));
     }
 

@@ -294,7 +294,10 @@ mod tests {
 
     #[test]
     fn brace_expansion_counts_each_alternative() {
-        assert_eq!(count_static_shell_words("https://x/a-${pkgver}.tar.bz2{,.sig}"), Some(2));
+        assert_eq!(
+            count_static_shell_words("https://x/a-${pkgver}.tar.bz2{,.sig}"),
+            Some(2)
+        );
         assert_eq!(count_static_shell_words("a{1,2,3} b"), Some(4));
         assert_eq!(count_static_shell_words("\"x{,.sig}\""), Some(1));
         assert_eq!(count_static_shell_words("x-${v}.tgz y-${v%.*}"), Some(2));

@@ -51,10 +51,7 @@ fn metadata_chunks(names: &[String]) -> Result<Vec<Vec<&str>>, String> {
     Ok(chunks)
 }
 
-fn batch_fetch_metadata_with<F>(
-    names: &[String],
-    mut fetch: F,
-) -> Result<BatchMetadata, String>
+fn batch_fetch_metadata_with<F>(names: &[String], mut fetch: F) -> Result<BatchMetadata, String>
 where
     F: FnMut(&[&str]) -> Result<Vec<AurPackage>, String>,
 {
@@ -359,7 +356,11 @@ mod tests {
 
     #[test]
     fn batch_fetch_reports_missing_names_in_request_order() {
-        let names = vec!["first".to_string(), "missing".to_string(), "last".to_string()];
+        let names = vec![
+            "first".to_string(),
+            "missing".to_string(),
+            "last".to_string(),
+        ];
         let metadata = batch_fetch_metadata_with(&names, |chunk| {
             Ok(chunk
                 .iter()

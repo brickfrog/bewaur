@@ -5,24 +5,18 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// Matches all source array variants: source=(), source_x86_64=(), etc.
-static SOURCE_ARRAYS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?ms)^source(?:_[a-zA-Z0-9_]+)?\s*=\s*\((.*?)\)").unwrap()
-});
+static SOURCE_ARRAYS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?ms)^source(?:_[a-zA-Z0-9_]+)?\s*=\s*\((.*?)\)").unwrap());
 
 /// Extracts URLs from quoted or unquoted tokens inside a source array.
-static URL_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"['"]([^'"]+)['"]|(\S+)"#).unwrap()
-});
+static URL_TOKEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]|(\S+)"#).unwrap());
 
 /// Matches ${url} or $url variable references.
-static URL_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\$\{url\}|\$url").unwrap()
-});
+static URL_VAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{url\}|\$url").unwrap());
 
 /// Matches any remaining unresolvable bash variable.
-static UNRESOLVED_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\$\{?\w+\}?").unwrap()
-});
+static UNRESOLVED_VAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{?\w+\}?").unwrap());
 
 pub struct BinSourceVerification;
 

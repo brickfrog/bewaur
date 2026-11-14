@@ -15,7 +15,11 @@ fn malicious_curl_pipe_triggers_override_gate() {
     let pkgbuild = include_str!("fixtures/malicious/curl_pipe_bash.PKGBUILD");
     let result = scan_pkgbuild("firefox-fix-bin", pkgbuild);
 
-    assert_eq!(result.tier, Tier::Malicious, "curl|bash should trigger MALICIOUS tier");
+    assert_eq!(
+        result.tier,
+        Tier::Malicious,
+        "curl|bash should trigger MALICIOUS tier"
+    );
     assert!(
         result.override_gate_fired.is_some(),
         "Override gate should fire for curl|bash"
@@ -80,7 +84,11 @@ fn python_rce_triggers_override_gate() {
     let pkgbuild = include_str!("fixtures/malicious/python_rce.PKGBUILD");
     let result = scan_pkgbuild("python-helper", pkgbuild);
 
-    assert_eq!(result.tier, Tier::Malicious, "Python exec(urlopen()) should trigger MALICIOUS");
+    assert_eq!(
+        result.tier,
+        Tier::Malicious,
+        "Python exec(urlopen()) should trigger MALICIOUS"
+    );
     assert!(result.override_gate_fired.is_some());
 }
 

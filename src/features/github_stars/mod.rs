@@ -15,10 +15,7 @@ impl Feature for GitHubStars {
                 points: 25,
                 description: "Upstream URL points to GitHub but repo does not exist".to_string(),
                 is_override_gate: false,
-                matched_line: ctx
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.url.clone()),
+                matched_line: ctx.metadata.as_ref().and_then(|m| m.url.clone()),
                 min_tier: None,
             });
             return signals;

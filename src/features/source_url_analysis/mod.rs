@@ -6,9 +6,8 @@ use crate::shared::scoring::{Signal, SignalCategory};
 use regex::Regex;
 use std::sync::LazyLock;
 
-static SOURCE_ARRAYS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?ms)^source(?:_[a-zA-Z0-9_]+)?\s*=\s*\((.*?)\)").unwrap()
-});
+static SOURCE_ARRAYS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?ms)^source(?:_[a-zA-Z0-9_]+)?\s*=\s*\((.*?)\)").unwrap());
 
 pub struct SourceUrlAnalysis;
 
@@ -78,7 +77,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        SourceUrlAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        SourceUrlAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -154,7 +157,10 @@ mod tests {
     #[test]
     fn github_no_signals() {
         let ids = analyze("https://github.com/user/repo/archive/v1.0.tar.gz");
-        assert!(ids.is_empty(), "GitHub URL should trigger no signals, got: {ids:?}");
+        assert!(
+            ids.is_empty(),
+            "GitHub URL should trigger no signals, got: {ids:?}"
+        );
     }
 
     #[test]
@@ -169,9 +175,7 @@ mod tests {
 
     #[test]
     fn architecture_specific_source_arrays_are_analyzed() {
-        let ids = analyze_content(
-            "source_x86_64=('http://192.0.2.1/payload.tar.gz')\n",
-        );
+        let ids = analyze_content("source_x86_64=('http://192.0.2.1/payload.tar.gz')\n");
         assert!(has(&ids, "P-RAW-IP-URL"), "got: {ids:?}");
         assert!(has(&ids, "P-HTTP-SOURCE"), "got: {ids:?}");
     }
@@ -180,6 +184,9 @@ mod tests {
     fn ignores_comments() {
         let content = "# source from https://pastebin.com/abc\nsource=('https://github.com/user/repo.tar.gz')\n";
         let ids = analyze_content(content);
-        assert!(!has(&ids, "P-PASTEBIN"), "Should not detect pastebin URL in comment");
+        assert!(
+            !has(&ids, "P-PASTEBIN"),
+            "Should not detect pastebin URL in comment"
+        );
     }
 }

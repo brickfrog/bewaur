@@ -2,9 +2,8 @@ use regex::Regex;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-static GITHUB_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)github\.com/([^/\s]+)/([^/\s#?.]+)"#).unwrap()
-});
+static GITHUB_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)github\.com/([^/\s]+)/([^/\s#?.]+)"#).unwrap());
 
 #[derive(Debug)]
 pub struct GitHubInfo {

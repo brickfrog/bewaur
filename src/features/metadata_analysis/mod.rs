@@ -109,7 +109,14 @@ mod tests {
     use super::*;
     use crate::shared::models::AurPackage;
 
-    fn make_meta(votes: u32, popularity: f64, maintainer: Option<&str>, url: Option<&str>, license: Option<Vec<String>>, out_of_date: Option<u64>) -> AurPackage {
+    fn make_meta(
+        votes: u32,
+        popularity: f64,
+        maintainer: Option<&str>,
+        url: Option<&str>,
+        license: Option<Vec<String>>,
+        out_of_date: Option<u64>,
+    ) -> AurPackage {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -142,7 +149,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        MetadataAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect()
+        MetadataAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -151,49 +162,108 @@ mod tests {
 
     #[test]
     fn votes_zero() {
-        let ids = analyze_meta(make_meta(0, 1.0, Some("user"), Some("https://example.com"), Some(vec!["MIT".into()]), None));
+        let ids = analyze_meta(make_meta(
+            0,
+            1.0,
+            Some("user"),
+            Some("https://example.com"),
+            Some(vec!["MIT".into()]),
+            None,
+        ));
         assert!(has(&ids, "M-VOTES-ZERO"));
     }
 
     #[test]
     fn votes_low() {
-        let ids = analyze_meta(make_meta(3, 1.0, Some("user"), Some("https://example.com"), Some(vec!["MIT".into()]), None));
+        let ids = analyze_meta(make_meta(
+            3,
+            1.0,
+            Some("user"),
+            Some("https://example.com"),
+            Some(vec!["MIT".into()]),
+            None,
+        ));
         assert!(has(&ids, "M-VOTES-LOW"));
     }
 
     #[test]
     fn pop_zero() {
-        let ids = analyze_meta(make_meta(10, 0.0, Some("user"), Some("https://example.com"), Some(vec!["MIT".into()]), None));
+        let ids = analyze_meta(make_meta(
+            10,
+            0.0,
+            Some("user"),
+            Some("https://example.com"),
+            Some(vec!["MIT".into()]),
+            None,
+        ));
         assert!(has(&ids, "M-POP-ZERO"));
     }
 
     #[test]
     fn no_maintainer() {
-        let ids = analyze_meta(make_meta(10, 1.0, None, Some("https://example.com"), Some(vec!["MIT".into()]), None));
+        let ids = analyze_meta(make_meta(
+            10,
+            1.0,
+            None,
+            Some("https://example.com"),
+            Some(vec!["MIT".into()]),
+            None,
+        ));
         assert!(has(&ids, "M-NO-MAINTAINER"));
     }
 
     #[test]
     fn no_url() {
-        let ids = analyze_meta(make_meta(10, 1.0, Some("user"), None, Some(vec!["MIT".into()]), None));
+        let ids = analyze_meta(make_meta(
+            10,
+            1.0,
+            Some("user"),
+            None,
+            Some(vec!["MIT".into()]),
+            None,
+        ));
         assert!(has(&ids, "M-NO-URL"));
     }
 
     #[test]
     fn no_license() {
-        let ids = analyze_meta(make_meta(10, 1.0, Some("user"), Some("https://example.com"), None, None));
+        let ids = analyze_meta(make_meta(
+            10,
+            1.0,
+            Some("user"),
+            Some("https://example.com"),
+            None,
+            None,
+        ));
         assert!(has(&ids, "M-NO-LICENSE"));
     }
 
     #[test]
     fn out_of_date() {
-        let ids = analyze_meta(make_meta(10, 1.0, Some("user"), Some("https://example.com"), Some(vec!["MIT".into()]), Some(1700000000)));
+        let ids = analyze_meta(make_meta(
+            10,
+            1.0,
+            Some("user"),
+            Some("https://example.com"),
+            Some(vec!["MIT".into()]),
+            Some(1700000000),
+        ));
         assert!(has(&ids, "M-OUT-OF-DATE"));
     }
 
     #[test]
     fn healthy_package_no_signals() {
-        let ids = analyze_meta(make_meta(100, 5.0, Some("user"), Some("https://example.com"), Some(vec!["MIT".into()]), None));
-        assert!(ids.is_empty(), "Healthy package should trigger no signals, got: {ids:?}");
+        let ids = analyze_meta(make_meta(
+            100,
+            5.0,
+            Some("user"),
+            Some("https://example.com"),
+            Some(vec!["MIT".into()]),
+            None,
+        ));
+        assert!(
+            ids.is_empty(),
+            "Healthy package should trigger no signals, got: {ids:?}"
+        );
     }
 }

@@ -494,7 +494,12 @@ fn cmd_scan_all_installed(
     let total = names.len();
     eprintln!(
         "{}",
-        format!("Scanning {} of {} foreign packages...", scan_names.len(), total).bold()
+        format!(
+            "Scanning {} of {} foreign packages...",
+            scan_names.len(),
+            total
+        )
+        .bold()
     );
 
     let maintainer_packages = prefetch_maintainer_packages(&metadata);

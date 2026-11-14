@@ -1,4 +1,4 @@
-use crate::shared::patterns::{load_patterns, CompiledPattern};
+use crate::shared::patterns::{CompiledPattern, load_patterns};
 use std::sync::OnceLock;
 
 static PATTERNS: OnceLock<Vec<CompiledPattern>> = OnceLock::new();

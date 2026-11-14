@@ -171,12 +171,11 @@ pub fn compute_score_with(
         Some((floor, signal)) => {
             let floor_tier = Tier::from(floor);
             let raised = base_tier.max(floor_tier);
-            let reason = (raised == floor_tier && floor_tier > scored_tier).then_some(
-                TierFloorReason {
+            let reason =
+                (raised == floor_tier && floor_tier > scored_tier).then_some(TierFloorReason {
                     tier: floor_tier,
                     signal,
-                },
-            );
+                });
             (raised, reason)
         }
         None => (base_tier, None),
@@ -365,7 +364,10 @@ mod tests {
         ];
         let result = compute_score("pkg", &signals);
         assert_eq!(result.tier, Tier::Malicious);
-        assert_eq!(result.override_gate_fired.as_deref(), Some("P-REVSHELL-DEVTCP"));
+        assert_eq!(
+            result.override_gate_fired.as_deref(),
+            Some("P-REVSHELL-DEVTCP")
+        );
         assert!(result.score <= 5, "Trust {} should be <= 5", result.score);
     }
 

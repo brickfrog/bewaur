@@ -65,7 +65,9 @@ pub fn build_context(package_name: &str) -> Result<ScanContext, String> {
     // reputation checks treat an empty list as "unknown" and would go quiet.
     let maintainer_packages = match metadata.maintainer.as_deref() {
         Some(maintainer) => crate::shared::bulk::fetch_maintainer_packages_with_retry(maintainer)
-            .map_err(|error| format!("maintainer package lookup for {maintainer} failed: {error}"))?,
+            .map_err(|error| {
+            format!("maintainer package lookup for {maintainer} failed: {error}")
+        })?,
         None => Vec::new(),
     };
 

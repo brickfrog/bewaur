@@ -32,8 +32,7 @@ pub struct CompiledPattern {
 /// Load and compile patterns for a given section from the database.
 pub fn load_patterns(section: &str) -> Vec<CompiledPattern> {
     let toml_str = include_str!("../../data/patterns.toml");
-    let db: PatternDatabase =
-        toml::from_str(toml_str).expect("Failed to parse patterns.toml");
+    let db: PatternDatabase = toml::from_str(toml_str).expect("Failed to parse patterns.toml");
 
     let Some(rules) = db.sections.get(section) else {
         return Vec::new();

@@ -95,7 +95,10 @@ mod tests {
     }
 
     fn now() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
     }
 
     fn has(ids: &[String], id: &str) -> bool {
@@ -118,7 +121,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        let ids: Vec<String> = MaintainerAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
+        let ids: Vec<String> = MaintainerAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
         assert!(has(&ids, "B-MAINTAINER-NEW"));
     }
 
@@ -138,7 +145,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        let ids: Vec<String> = MaintainerAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
+        let ids: Vec<String> = MaintainerAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
         assert!(has(&ids, "B-MAINTAINER-SINGLE"));
     }
 
@@ -162,7 +173,11 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        let ids: Vec<String> = MaintainerAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
+        let ids: Vec<String> = MaintainerAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
         assert!(has(&ids, "B-MAINTAINER-BATCH"));
     }
 }

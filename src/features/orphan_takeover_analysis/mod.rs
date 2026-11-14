@@ -135,7 +135,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn now() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
     }
 
     fn make_pkg(maintainer: &str, submitter: Option<&str>, first_submitted: u64) -> AurPackage {
@@ -221,7 +224,11 @@ mod tests {
         ctx.metadata.as_mut().unwrap().num_votes = 4;
         let signal = signal_by_id(&ctx, "B-UNPROVEN-ADOPTION").expect("should fire");
         assert_eq!(signal.min_tier, Some(TierFloor::Ok));
-        assert!(signal.description.contains("4 votes"), "{}", signal.description);
+        assert!(
+            signal.description.contains("4 votes"),
+            "{}",
+            signal.description
+        );
     }
 
     #[test]
@@ -398,7 +405,10 @@ mod tests {
         };
         let ids = signal_ids(&ctx);
         assert!(has(&ids, "B-SUBMITTER-CHANGED"));
-        assert!(!has(&ids, "B-ORPHAN-TAKEOVER"), "New package should not trigger composite signal");
+        assert!(
+            !has(&ids, "B-ORPHAN-TAKEOVER"),
+            "New package should not trigger composite signal"
+        );
     }
 
     #[test]
@@ -421,6 +431,9 @@ mod tests {
         };
         let ids = signal_ids(&ctx);
         assert!(has(&ids, "B-SUBMITTER-CHANGED"));
-        assert!(!has(&ids, "B-ORPHAN-TAKEOVER"), "Same git author should not trigger composite");
+        assert!(
+            !has(&ids, "B-ORPHAN-TAKEOVER"),
+            "Same git author should not trigger composite"
+        );
     }
 }

@@ -217,10 +217,7 @@ fn ignored_category_cannot_defeat_a_tier_floor() {
         Some("B-ORPHAN-TAKEOVER"),
     );
     assert!(
-        !result
-            .signals
-            .iter()
-            .any(|s| s.id == "B-ORPHAN-TAKEOVER"),
+        !result.signals.iter().any(|s| s.id == "B-ORPHAN-TAKEOVER"),
         "the signal itself should still be hidden from the report"
     );
 }
@@ -263,10 +260,7 @@ fn quietly_adopted_low_vote_package_cannot_be_trusted() {
     let result = run_analysis_with_config(&ctx, &Config::default());
 
     assert!(
-        !result
-            .signals
-            .iter()
-            .any(|s| s.id == "B-ORPHAN-TAKEOVER"),
+        !result.signals.iter().any(|s| s.id == "B-ORPHAN-TAKEOVER"),
         "no visible author change, so the composite must not fire"
     );
     assert!(
@@ -299,10 +293,7 @@ fn adoption_by_an_established_maintainer_is_not_unproven() {
 
     let result = run_analysis_with_config(&ctx, &Config::default());
     assert!(
-        !result
-            .signals
-            .iter()
-            .any(|s| s.id == "B-UNPROVEN-ADOPTION"),
+        !result.signals.iter().any(|s| s.id == "B-UNPROVEN-ADOPTION"),
         "an established adopter of a popular package is not unproven"
     );
     assert_eq!(result.tier, Tier::Trusted);
@@ -325,12 +316,8 @@ fn unfetched_maintainer_packages_do_not_corroborate() {
 
     let result = run_analysis_with_config(&ctx, &Config::default());
     assert!(
-        !result
-            .signals
-            .iter()
-            .any(|s| s.id == "B-UNPROVEN-ADOPTION"),
+        !result.signals.iter().any(|s| s.id == "B-UNPROVEN-ADOPTION"),
         "an unfetched maintainer list must not read as a single-package account"
     );
     assert_eq!(result.tier, Tier::Trusted);
 }
-

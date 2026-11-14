@@ -135,7 +135,10 @@ fn hook_blocks_when_the_alpm_target_stream_is_not_valid_utf8() {
     let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(!output.status.success(), "{stderr}");
-    assert!(stderr.contains("failed to read ALPM target list"), "{stderr}");
+    assert!(
+        stderr.contains("failed to read ALPM target list"),
+        "{stderr}"
+    );
     assert!(stderr.contains("blocking transaction"), "{stderr}");
 }
 

