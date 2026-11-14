@@ -54,6 +54,9 @@ cargo build --release
 
 Binaries: `target/release/bewaur` (CLI) and `target/release/bewaur-hook` (ALPM hook).
 
+The tree is `cargo fmt`-clean; run `cargo fmt` before committing. Formatting-only
+commits go in `.git-blame-ignore-revs`.
+
 ## Install local package
 
 ```bash
