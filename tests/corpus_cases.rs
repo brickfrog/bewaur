@@ -18,6 +18,7 @@
 //! `CASE` keys: `max_tier`, `min_tier`, `required`, `forbidden` (comma lists),
 //! `helpers` (comma list of committed files analysed as executable helpers),
 //! `install` (comma list of install scripts; default: every `*.install`),
+//! `expect_error` (the gate loader must refuse the tree; needs `.SRCINFO`),
 //! and the informational `note`, `revision`.
 //!
 //! Run `cargo test --test corpus_cases -- --nocapture` for the full report.
@@ -36,6 +37,8 @@ struct Case {
     forbidden: Vec<String>,
     helpers: Vec<String>,
     install: Option<Vec<String>>,
+    /// The gate loader must refuse the tree with an error containing this.
+    expect_error: Option<String>,
 }
 
 fn parse_tier(value: &str) -> Tier {
@@ -80,6 +83,7 @@ fn parse_case(dir: &Path) -> Case {
             "forbidden" => case.forbidden = split_list(value),
             "helpers" => case.helpers = split_list(value),
             "install" => case.install = Some(split_list(value)),
+            "expect_error" => case.expect_error = Some(value.to_string()),
             "note" | "revision" => {}
             other => panic!("{name}: unknown CASE key `{other}`"),
         }
@@ -115,7 +119,34 @@ fn read_joined(dir: &Path, names: &[String]) -> Option<String> {
     Some(parts.join("\n"))
 }
 
+fn load_error(dir: &Path) -> Option<String> {
+    let srcinfo = std::fs::read_to_string(dir.join(".SRCINFO")).ok()?;
+    let pkgbase = srcinfo
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("pkgbase = "))?;
+    bewaur::shared::local_build::load_build_tree(dir, pkgbase).err()
+}
+
 fn scan_case(dir: &Path, case: &Case) -> ScanResult {
+    // A case with a `.SRCINFO` goes through the real inert gate loader, so
+    // helper discovery, install resolution and artifact detection are tested
+    // exactly as `bewaur gate` runs them.
+    if let Ok(srcinfo) = std::fs::read_to_string(dir.join(".SRCINFO")) {
+        let pkgbase = srcinfo
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("pkgbase = "))
+            .unwrap_or_else(|| panic!("{}: .SRCINFO without pkgbase", case.name));
+        let tree = bewaur::shared::local_build::load_build_tree(dir, pkgbase)
+            .unwrap_or_else(|error| panic!("{}: gate loader failed: {error}", case.name));
+        return scan_local_build_with_config(
+            &tree.pkgbase,
+            &tree.pkgbuild_content,
+            tree.install_script_content.as_deref(),
+            tree.local_source_content.as_deref(),
+            &tree.executed_artifacts,
+            &Config::default(),
+        );
+    }
     let pkgbuild = std::fs::read_to_string(dir.join("PKGBUILD")).unwrap();
     let install_names = case.install.clone().unwrap_or_else(|| {
         let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -133,6 +164,7 @@ fn scan_case(dir: &Path, case: &Case) -> ScanResult {
         &pkgbuild,
         install.as_deref(),
         helpers.as_deref(),
+        &[],
         &Config::default(),
     )
 }
@@ -150,6 +182,18 @@ fn check(kind: &str) {
     let mut failures = Vec::new();
     for dir in case_dirs(kind) {
         let case = parse_case(&dir);
+        if let Some(expected) = &case.expect_error {
+            match load_error(&dir) {
+                Some(error) if error.contains(expected.as_str()) => {
+                    eprintln!("{kind}/{}: refused: {error}", case.name);
+                }
+                other => failures.push(format!(
+                    "{kind}/{}: expected loader error containing {expected:?}, got {other:?}",
+                    case.name
+                )),
+            }
+            continue;
+        }
         if kind == "benign" {
             assert!(
                 case.max_tier.is_some(),

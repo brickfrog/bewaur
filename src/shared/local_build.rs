@@ -3,6 +3,9 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use sha2::{Digest, Sha256};
 
@@ -25,6 +28,10 @@ pub struct LocalBuildTree {
     pub install_script_content: Option<String>,
     pub local_source_paths: Vec<String>,
     pub local_source_content: Option<String>,
+    /// Downloaded, checksum-pinned `source=()` artifacts that a build step
+    /// executes (`./"$_appimage" --appimage-extract`). They are reported, not
+    /// read as shell helpers: they are opaque upstream binaries.
+    pub executed_artifacts: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -33,6 +40,10 @@ struct SrcInfo {
     package_names: Vec<String>,
     install_scripts: Vec<String>,
     local_sources: Vec<String>,
+    /// Local filenames of remote, non-VCS sources whose checksum is not SKIP.
+    checksummed_remote_sources: HashSet<String>,
+    /// Local filenames of every remote, non-VCS source.
+    remote_sources: HashSet<String>,
 }
 
 /// Validated package identity and inert `.SRCINFO` declarations.
@@ -200,6 +211,7 @@ pub fn load_build_tree_from_manifest(
     // Independently inspect the PKGBUILD for literal install assignments and
     // read the union. Dynamic assignments are not safely resolvable without
     // evaluating attacker-controlled shell, so they fail closed.
+    let literals = literal_variables(&pkgbuild_content, &srcinfo.pkgbase, &srcinfo.package_names);
     let pkgbuild_install_scripts = extract_install_scripts(
         &pkgbuild_content,
         &srcinfo.pkgbase,
@@ -231,11 +243,14 @@ pub fn load_build_tree_from_manifest(
         Some(install_contents.join("\n\n"))
     };
 
-    let local_source_candidates = discover_local_source_candidates(
+    let (local_source_candidates, executed_artifacts) = discover_local_source_candidates(
         &pkgbuild_content,
         &srcinfo.pkgbase,
         &srcinfo.package_names,
         &srcinfo.local_sources,
+        &srcinfo.checksummed_remote_sources,
+        &srcinfo.remote_sources,
+        &literals,
     )?;
     let mut local_source_paths = Vec::new();
     let mut local_source_contents = Vec::new();
@@ -307,6 +322,7 @@ pub fn load_build_tree_from_manifest(
         install_script_content,
         local_source_paths,
         local_source_content,
+        executed_artifacts,
     })
 }
 
@@ -318,6 +334,14 @@ fn parse_srcinfo(content: &str) -> Result<SrcInfo, String> {
     let mut seen_packages = HashSet::new();
     let mut seen_install_scripts = HashSet::new();
     let mut seen_local_sources = HashSet::new();
+    // Per architecture suffix ("" or "_x86_64"): source values and, per
+    // checksum algorithm, the checksum values, both in declaration order.
+    let mut sources_by_suffix: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut sums_by_suffix: std::collections::HashMap<String, Vec<Vec<String>>> =
+        std::collections::HashMap::new();
+    let mut sums_by_key: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for (index, line) in content.lines().enumerate() {
         let line_number = index + 1;
@@ -354,13 +378,47 @@ fn parse_srcinfo(content: &str) -> Result<SrcInfo, String> {
                 }
             }
             key if key == "source" || key.starts_with("source_") => {
+                sources_by_suffix
+                    .entry(key["source".len()..].to_string())
+                    .or_default()
+                    .push(value.to_string());
                 if let Some(local_source) = parse_local_source(value)?
                     && seen_local_sources.insert(local_source.clone())
                 {
                     local_sources.push(local_source);
                 }
             }
+            key if checksum_key_suffix(key).is_some() => {
+                sums_by_key
+                    .entry(key.to_string())
+                    .or_default()
+                    .push(value.to_string());
+            }
             _ => {}
+        }
+    }
+
+    for (key, values) in sums_by_key {
+        let suffix = checksum_key_suffix(&key).unwrap_or_default().to_string();
+        sums_by_suffix.entry(suffix).or_default().push(values);
+    }
+    let mut checksummed_remote_sources = HashSet::new();
+    let remote_sources: HashSet<String> = sources_by_suffix
+        .values()
+        .flatten()
+        .filter_map(|source| remote_artifact_name(source))
+        .collect();
+    for (suffix, sources) in &sources_by_suffix {
+        let sums = sums_by_suffix.get(suffix);
+        for (index, source) in sources.iter().enumerate() {
+            let pinned = sums.is_some_and(|arrays| {
+                arrays
+                    .iter()
+                    .any(|values| values.get(index).is_some_and(|sum| sum != "SKIP"))
+            });
+            if pinned && let Some(name) = remote_artifact_name(source) {
+                checksummed_remote_sources.insert(name);
+            }
         }
     }
 
@@ -374,7 +432,47 @@ fn parse_srcinfo(content: &str) -> Result<SrcInfo, String> {
         package_names,
         install_scripts,
         local_sources,
+        checksummed_remote_sources,
+        remote_sources,
     })
+}
+
+/// `sha256sums_x86_64` -> `Some("_x86_64")`; `sha256sums` -> `Some("")`.
+fn checksum_key_suffix(key: &str) -> Option<&str> {
+    ["md5sums", "sha1sums", "sha224sums", "sha256sums", "sha384sums", "sha512sums", "b2sums"]
+        .into_iter()
+        .find_map(|prefix| key.strip_prefix(prefix))
+        .filter(|suffix| suffix.is_empty() || suffix.starts_with('_'))
+}
+
+/// makepkg's local filename for a remote, non-VCS source (`name::url`, or the
+/// URL's last path segment without a `#fragment`). Local and VCS sources and
+/// names with path separators yield `None`.
+fn remote_artifact_name(value: &str) -> Option<String> {
+    if !source_is_remote(value).ok()? {
+        return None;
+    }
+    let (explicit, url) = match value.split_once("::") {
+        Some((name, url)) => (Some(name.trim()), url.trim()),
+        None => (None, value.trim()),
+    };
+    let scheme = url.split_once(':').map(|(scheme, _)| scheme.to_ascii_lowercase())?;
+    if scheme.contains('+') || matches!(scheme.as_str(), "git" | "svn" | "hg" | "bzr" | "fossil") {
+        return None;
+    }
+    let name = match explicit {
+        Some(name) => name.to_string(),
+        None => {
+            let without_fragment = url.split('#').next().unwrap_or(url);
+            without_fragment
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        }
+    };
+    (!name.is_empty() && !name.contains('/') && name != "." && name != "..").then_some(name)
 }
 
 fn parse_local_source(value: &str) -> Result<Option<String>, String> {
@@ -997,6 +1095,7 @@ fn extract_install_scripts(
     package_names: &[String],
     declared_install_scripts: &[String],
 ) -> Result<Vec<String>, String> {
+    let literals = &literal_variables(content, pkgbase, package_names);
     let program = parse_shell_program(content)?;
     let mut install_scripts = Vec::new();
     let mut seen = HashSet::new();
@@ -1037,6 +1136,7 @@ fn extract_install_scripts(
                     value,
                     pkgbase,
                     package_names,
+                    literals,
                     &declared,
                     &mut seen,
                     &mut install_scripts,
@@ -1050,11 +1150,13 @@ fn extract_install_scripts(
     Ok(install_scripts)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_install_assignment(
     word: &ShellWord,
     value: &str,
     pkgbase: &str,
     package_names: &[String],
+    literals: &LiteralVariables,
     declared: &HashSet<&str>,
     seen: &mut HashSet<String>,
     install_scripts: &mut Vec<String>,
@@ -1067,12 +1169,14 @@ fn collect_install_assignment(
     }
 
     let resolved = if word.has_expansion {
-        resolve_known_install_template(value, pkgbase, package_names).ok_or_else(|| {
-            format!(
-                "dynamic install assignment on PKGBUILD line {} cannot be resolved safely",
-                word.line
-            )
-        })?
+        resolve_known_install_template(value, pkgbase, package_names)
+            .or_else(|| literals.expand(value).map(|resolved| vec![resolved]))
+            .ok_or_else(|| {
+                format!(
+                    "dynamic install assignment on PKGBUILD line {} cannot be resolved safely",
+                    word.line
+                )
+            })?
     } else if value.contains('$') || value.contains('`') {
         return Err(format!(
             "install assignment on PKGBUILD line {} contains a literal expansion marker and cannot be resolved safely",
@@ -1349,15 +1453,242 @@ fn resolve_known_install_template(
     }
 }
 
+/// Top-level PKGBUILD variables whose value is fully determined by literal
+/// text, for resolving names such as `./"${_appimage}"` and
+/// `install=$_pkgname.install` without evaluating shell.
+///
+/// Deliberately conservative. A variable resolves only when:
+/// - it is assigned exactly once, as a plain `name=value` command before the
+///   first function definition (so it is in effect for every build function);
+/// - every other mention of the name, in the comment-stripped text and in the
+///   quote-joined view (which defeats `"_app""image=x"`), is `$name` or
+///   `${name}`;
+/// - its value contains no backslash and expands only other resolvable
+///   variables (or `.SRCINFO`'s `pkgbase`/single `pkgname`), with no
+///   parameter operators, command substitution, or backticks; and
+/// - the PKGBUILD has no construct that can assign a computed name: `eval`,
+///   `printf -v`, namerefs, `${!...}`, `source`/`.`, or a
+///   declare/export/local/readonly/read/mapfile/unset name containing `$`.
+///
+/// `pkgver` never resolves when a `pkgver()` function exists.
+struct LiteralVariables {
+    values: std::collections::HashMap<String, String>,
+}
+
+impl LiteralVariables {
+    /// Expand `$name`/`${name}` references using resolved literals only.
+    fn expand(&self, value: &str) -> Option<String> {
+        expand_literal_references(value, &|name| self.values.get(name).cloned())
+    }
+}
+
+fn expand_literal_references(
+    value: &str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if value.contains(['`', '\\']) {
+        return None;
+    }
+    let mut output = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(position) = rest.find('$') {
+        output.push_str(&rest[..position]);
+        let after = &rest[position + 1..];
+        let (name, consumed) = if let Some(braced) = after.strip_prefix('{') {
+            let end = braced.find('}')?;
+            (&braced[..end], end + 2)
+        } else {
+            let end = after
+                .find(|character: char| !(character == '_' || character.is_ascii_alphanumeric()))
+                .unwrap_or(after.len());
+            (&after[..end], end)
+        };
+        if !is_shell_identifier(name) {
+            return None;
+        }
+        output.push_str(&lookup(name)?);
+        rest = &after[consumed..];
+    }
+    output.push_str(rest);
+    Some(output)
+}
+
+static FUNCTION_DEFINITION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^[ \t]*(?:function[ \t]+)?[A-Za-z_][A-Za-z0-9_-]*[ \t]*\([ \t]*\)").unwrap()
+});
+static DYNAMIC_NAME_CONSTRUCT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)\beval\b|\bprintf\b[^\n;|&]*[ \t]-v\b|\$\{!|\b(?:declare|typeset|local|readonly|export)\b[^\n;|&]*[ \t]-[A-Za-z]*n|(?:^|[;&|({]|\b(?:then|do|else))[ \t]*(?:source|\.)[ \t]+[^=\s]",
+    )
+    .unwrap()
+});
+static NAME_DEFINING_COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:declare|typeset|local|readonly|export|read|mapfile|readarray|unset)\b([^\n;|&]*)")
+        .unwrap()
+});
+
+fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> LiteralVariables {
+    let empty = LiteralVariables {
+        values: std::collections::HashMap::new(),
+    };
+    let active = crate::shared::shell_syntax::strip_comments(content);
+    let joined = crate::shared::shell_syntax::join_quoted_fragments(&active);
+    for view in [&active, &joined] {
+        if DYNAMIC_NAME_CONSTRUCT_RE.is_match(view) {
+            return empty;
+        }
+        for captures in NAME_DEFINING_COMMAND_RE.captures_iter(view) {
+            let dynamic = captures[1].split_whitespace().any(|word| {
+                let name = word.split('=').next().unwrap_or(word);
+                !word.starts_with('-') && name.contains(['$', '`'])
+            });
+            if dynamic {
+                return empty;
+            }
+        }
+    }
+    let Ok(program) = parse_shell_program(content) else {
+        return empty;
+    };
+    let first_function_line = FUNCTION_DEFINITION_RE
+        .find(&active)
+        .map_or(usize::MAX, |found| active[..found.start()].matches('\n').count() + 1);
+    let raw_lines: Vec<&str> = content.lines().collect();
+
+    let mut raw_values = std::collections::HashMap::new();
+    for command in &program.commands {
+        let all_assignments = command
+            .words
+            .iter()
+            .all(|word| scalar_assignment(&word.value).is_some_and(|(_, _, simple)| simple));
+        if !all_assignments {
+            continue;
+        }
+        for word in &command.words {
+            let (name, value, _) = scalar_assignment(&word.value).unwrap();
+            let raw_line = raw_lines.get(word.line.saturating_sub(1)).copied().unwrap_or("");
+            let usable = word.line < first_function_line
+                && !raw_line.contains('\\')
+                && (word.has_expansion || !value.contains(['$', '`']))
+                && name_mentions_are_plain(name, &[&active, &joined]);
+            // A second assignment anywhere also fails `name_mentions_are_plain`.
+            raw_values.insert(name.to_string(), usable.then(|| value.to_string()));
+        }
+    }
+    let has_pkgver_function = Regex::new(r"(?m)^[ \t]*(?:function[ \t]+)?pkgver[ \t]*\(")
+        .map(|regex| regex.is_match(&active))
+        .unwrap_or(true);
+
+    fn resolve(
+        name: &str,
+        raw: &std::collections::HashMap<String, Option<String>>,
+        builtins: &dyn Fn(&str) -> Option<String>,
+        depth: usize,
+    ) -> Option<String> {
+        if depth > 4 {
+            return None;
+        }
+        match raw.get(name) {
+            Some(Some(value)) => expand_literal_references(value, &|inner| {
+                resolve(inner, raw, builtins, depth + 1)
+            }),
+            Some(None) => None,
+            None => builtins(name),
+        }
+    }
+    let builtins = |name: &str| match name {
+        "pkgbase" => Some(pkgbase.to_string()),
+        "pkgname" if package_names.len() == 1 => Some(package_names[0].clone()),
+        _ => None,
+    };
+
+    let mut values = std::collections::HashMap::new();
+    for name in raw_values.keys() {
+        if name == "pkgver" && has_pkgver_function {
+            continue;
+        }
+        if let Some(value) = resolve(name, &raw_values, &builtins, 0)
+            && !value.contains(['*', '?', '[', ']'])
+        {
+            values.insert(name.clone(), value);
+        }
+    }
+    if has_pkgver_function {
+        // References to pkgver in other variables must not resolve either.
+        values.retain(|name, _| {
+            raw_values
+                .get(name)
+                .and_then(Option::as_deref)
+                .is_none_or(|raw| !raw.contains("pkgver"))
+        });
+    }
+    LiteralVariables { values }
+}
+
+/// Every whole-word mention of `name` is `$name`, `${name}`, or the single
+/// `name=` assignment at the start of a word.
+fn name_mentions_are_plain(name: &str, views: &[&str]) -> bool {
+    views.iter().all(|view| {
+        let bytes = view.as_bytes();
+        let mut assignments = 0usize;
+        let mut search = 0usize;
+        while let Some(relative) = view[search..].find(name) {
+            let start = search + relative;
+            let end = start + name.len();
+            search = end;
+            let before = start.checked_sub(1).map(|index| bytes[index]);
+            let after = bytes.get(end).copied();
+            let is_word_char = |byte: u8| byte == b'_' || byte.is_ascii_alphanumeric();
+            if before.is_some_and(is_word_char) || after.is_some_and(is_word_char) {
+                continue;
+            }
+            match (before, after) {
+                (Some(b'$'), _) => {}
+                (Some(b'{'), Some(b'}')) if start >= 2 && bytes[start - 2] == b'$' => {}
+                (None | Some(b' ' | b'\t' | b'\n' | b';'), Some(b'='))
+                    if bytes.get(end + 1) != Some(&b'=') =>
+                {
+                    assignments += 1;
+                }
+                _ => return false,
+            }
+        }
+        assignments <= 1
+    })
+}
+
 fn discover_local_source_candidates(
     content: &str,
     pkgbase: &str,
     package_names: &[String],
     declared_local_sources: &[String],
-) -> Result<Vec<LocalSourceCandidate>, String> {
+    checksummed_remote_sources: &HashSet<String>,
+    remote_sources: &HashSet<String>,
+    literals: &LiteralVariables,
+) -> Result<(Vec<LocalSourceCandidate>, Vec<String>), String> {
     let program = parse_shell_program(content)?;
     let declared: HashSet<&str> = declared_local_sources.iter().map(String::as_str).collect();
     let mut candidates = Vec::new();
+    let mut executed_artifacts: Vec<String> = Vec::new();
+    // A downloaded artifact must be a checksummed remote source in both
+    // `.SRCINFO` and the PKGBUILD's own source arrays, and never also a local
+    // source; otherwise an executed "artifact" could be a committed file.
+    let mut pkgbuild_remote_names = HashSet::new();
+    let mut remote_source_word = |word: &ShellWord| {
+        let value = if word.has_expansion {
+            literals.expand(&word.value)
+        } else {
+            (!word.value.contains(['$', '`'])).then(|| word.value.clone())
+        };
+        if let Some(name) = value.as_deref().and_then(remote_artifact_name) {
+            pkgbuild_remote_names.insert(name);
+        }
+    };
+    for array in &program.arrays {
+        if array.global_source_assignment && is_source_variable(&array.name) {
+            array.words.iter().for_each(&mut remote_source_word);
+        }
+    }
 
     for path in declared_local_sources {
         add_local_source_candidate(&mut candidates, path.clone(), false, true);
@@ -1374,11 +1705,20 @@ fn discover_local_source_candidates(
             ));
         }
         for word in &array.words {
-            for path in resolve_source_array_word(word, pkgbase, package_names, &declared)? {
+            for path in resolve_source_array_word(word, pkgbase, package_names, &declared, literals)? {
                 add_local_source_candidate(&mut candidates, path, false, true);
             }
         }
     }
+    let local_names: HashSet<String> = candidates
+        .iter()
+        .map(|candidate| candidate.path.clone())
+        .collect();
+    let is_artifact = |path: &str| {
+        checksummed_remote_sources.contains(path)
+            && pkgbuild_remote_names.contains(path)
+            && !local_names.contains(path)
+    };
 
     for command in &program.commands {
         for word in global_source_assignment_words(command) {
@@ -1388,8 +1728,14 @@ fn discover_local_source_candidates(
                 line: word.line,
                 has_expansion: word.has_expansion,
             };
-            for path in resolve_source_array_word(&source_word, pkgbase, package_names, &declared)?
+            for path in
+                resolve_source_array_word(&source_word, pkgbase, package_names, &declared, literals)?
             {
+                if is_artifact(&path) {
+                    return Err(format!(
+                        "source {path:?} is declared both as a local file and a downloaded artifact"
+                    ));
+                }
                 add_local_source_candidate(&mut candidates, path, false, true);
             }
         }
@@ -1408,7 +1754,7 @@ fn discover_local_source_candidates(
 
         if command_name == "source" || command_name == "." {
             if let Some(argument) = arguments.iter().find(|word| !word.value.starts_with('-')) {
-                for path in resolve_explicit_helpers(argument, pkgbase, package_names)? {
+                for path in resolve_explicit_helpers(argument, pkgbase, package_names, literals)? {
                     add_local_source_candidate(&mut candidates, path, true, true);
                 }
             }
@@ -1420,7 +1766,21 @@ fn discover_local_source_candidates(
             || executable_word.value.starts_with("$srcdir/")
             || executable_word.value.starts_with("${srcdir}/")
         {
-            for path in resolve_explicit_helpers(executable_word, pkgbase, package_names)? {
+            for path in resolve_explicit_helpers(executable_word, pkgbase, package_names, literals)? {
+                if is_artifact(&path) {
+                    if !executed_artifacts.contains(&path) {
+                        executed_artifacts.push(path);
+                    }
+                    continue;
+                }
+                if !local_names.contains(&path)
+                    && (remote_sources.contains(&path) || pkgbuild_remote_names.contains(&path))
+                {
+                    return Err(format!(
+                        "build step on PKGBUILD line {} executes downloaded source {path:?} that has no .SRCINFO checksum pin",
+                        executable_word.line
+                    ));
+                }
                 add_local_source_candidate(&mut candidates, path, true, false);
             }
             continue;
@@ -1428,19 +1788,19 @@ fn discover_local_source_candidates(
 
         if is_script_interpreter(command_name) {
             for argument in interpreter_file_arguments(command_name, arguments) {
-                for path in resolve_explicit_helpers(&argument, pkgbase, package_names)? {
+                for path in resolve_explicit_helpers(&argument, pkgbase, package_names, literals)? {
                     add_local_source_candidate(&mut candidates, path, true, false);
                 }
             }
             for input_file in &command.input_files {
-                for path in resolve_explicit_helpers(input_file, pkgbase, package_names)? {
+                for path in resolve_explicit_helpers(input_file, pkgbase, package_names, literals)? {
                     add_local_source_candidate(&mut candidates, path, true, false);
                 }
             }
         }
     }
 
-    Ok(candidates)
+    Ok((candidates, executed_artifacts))
 }
 
 fn is_source_variable(name: &str) -> bool {
@@ -1487,6 +1847,7 @@ fn resolve_source_array_word(
     pkgbase: &str,
     package_names: &[String],
     declared: &HashSet<&str>,
+    literals: &LiteralVariables,
 ) -> Result<Vec<String>, String> {
     if source_is_remote(&word.value)? {
         return Ok(Vec::new());
@@ -1494,7 +1855,15 @@ fn resolve_source_array_word(
 
     if word.has_expansion {
         let source = source_payload(&word.value);
-        let Some(resolved) = resolve_known_install_template(source, pkgbase, package_names) else {
+        let Some(resolved) = resolve_known_install_template(source, pkgbase, package_names)
+            .or_else(|| {
+                let expanded = literals.expand(&word.value)?;
+                if source_is_remote(&expanded).ok()? {
+                    return Some(Vec::new());
+                }
+                Some(vec![source_payload(&expanded).to_string()])
+            })
+        else {
             // `.SRCINFO` supplies makepkg's resolved source list. We still
             // independently union every literal source here, but arbitrary
             // shell-generated source names cannot be recovered without
@@ -1558,6 +1927,7 @@ fn resolve_explicit_helpers(
     word: &ShellWord,
     pkgbase: &str,
     package_names: &[String],
+    literals: &LiteralVariables,
 ) -> Result<Vec<String>, String> {
     let value = word.value.as_str();
     if Path::new(value).is_absolute() || source_is_remote(value)? {
@@ -1571,12 +1941,14 @@ fn resolve_explicit_helpers(
         .unwrap_or(value);
 
     let resolved = if word.has_expansion || path.contains('$') || path.contains('`') {
-        resolve_known_helper_template(path, pkgbase, package_names).ok_or_else(|| {
-            format!(
-                "dynamic local helper on PKGBUILD line {} cannot be resolved safely",
-                word.line
-            )
-        })?
+        resolve_known_helper_template(path, pkgbase, package_names)
+            .or_else(|| literals.expand(path).map(|resolved| vec![resolved]))
+            .ok_or_else(|| {
+                format!(
+                    "dynamic local helper on PKGBUILD line {} cannot be resolved safely",
+                    word.line
+                )
+            })?
     } else {
         vec![path.to_string()]
     };
@@ -2388,7 +2760,7 @@ package_demo_cli() { install="${pkgname}.install"; }
         let dir = TestDir::new("dynamic-install");
         dir.write(
             "PKGBUILD",
-            "pkgname=demo\n_install_name=demo.install\ninstall=\"${_install_name}\"\n",
+            "pkgname=demo\n_install_name=$(echo demo.install)\ninstall=\"${_install_name}\"\n",
         );
         dir.write(
             ".SRCINFO",
@@ -2399,6 +2771,37 @@ package_demo_cli() { install="${pkgname}.install"; }
         let error = load_build_tree(&dir.0, "demo").unwrap_err();
 
         assert!(error.contains("dynamic install assignment"), "{error}");
+    }
+
+    #[test]
+    fn resolves_literal_variable_install_assignment_declared_by_srcinfo() {
+        let dir = TestDir::new("literal-install");
+        dir.write(
+            "PKGBUILD",
+            "pkgname=demo\n_install_name=demo\ninstall=\"${_install_name}.install\"\n",
+        );
+        dir.write(
+            ".SRCINFO",
+            "pkgbase = demo\n\npkgname = demo\n\tinstall = demo.install\n",
+        );
+        dir.write("demo.install", "post_install() { :; }\n");
+        let tree = load_build_tree(&dir.0, "demo").unwrap();
+        assert_eq!(tree.install_script_paths, vec!["demo.install".to_string()]);
+
+        // The resolved literal must still be declared by .SRCINFO.
+        let undeclared = TestDir::new("literal-install-undeclared");
+        undeclared.write(
+            "PKGBUILD",
+            "pkgname=demo\n_install_name=other\ninstall=\"${_install_name}.install\"\n",
+        );
+        undeclared.write(
+            ".SRCINFO",
+            "pkgbase = demo\n\npkgname = demo\n\tinstall = demo.install\n",
+        );
+        undeclared.write("demo.install", "post_install() { :; }\n");
+        undeclared.write("other.install", "post_install() { :; }\n");
+        let error = load_build_tree(&undeclared.0, "demo").unwrap_err();
+        assert!(error.contains("which .SRCINFO does not declare"), "{error}");
     }
 
     #[test]
@@ -3048,5 +3451,97 @@ package_demo_cli() { install="${pkgname}.install"; }
         load_build_tree(&dir.0, "demo").unwrap();
 
         assert!(!marker.exists(), "PKGBUILD was unexpectedly evaluated");
+    }
+}
+
+#[cfg(test)]
+mod literal_variable_tests {
+    use super::{literal_variables, remote_artifact_name};
+
+    const BASE: &str = "pkgname=demo\npkgver=1.2\n_app=\"Demo_${pkgver}.AppImage\"\n";
+
+    fn resolved(extra: &str) -> Option<String> {
+        let content = format!("{BASE}{extra}");
+        literal_variables(&content, "demo", &["demo".to_string()])
+            .values
+            .get("_app")
+            .cloned()
+    }
+
+    #[test]
+    fn resolves_single_top_level_literal_chain() {
+        assert_eq!(
+            resolved("prepare() {\n  ./\"${_app}\" --appimage-extract\n}\n").as_deref(),
+            Some("Demo_1.2.AppImage")
+        );
+    }
+
+    #[test]
+    fn any_mutation_or_dynamic_naming_disables_resolution() {
+        for extra in [
+            "prepare() { _app=payload.sh; }\n",
+            "_app+=x\n",
+            "_app[0]=x\n",
+            "prepare() { for _app in *.sh; do :; done; }\n",
+            "prepare() { read -r _app < list; }\n",
+            "prepare() { local -n ref=_app; ref=x; }\n",
+            "prepare() { eval \"_a\"\"pp=x\"; }\n",
+            "prepare() { printf -v \"_a\"\"pp\" %s x; }\n",
+            "prepare() { export \"$name=x\"; }\n",
+            "prepare() { declare \"_a\"\"pp=x\"; }\n",
+            "prepare() { echo ${!ref}; }\n",
+            "prepare() { echo ${_app:-x}; }\n",
+            "prepare() { echo ${#_app}; }\n",
+            "prepare() { source ./env.sh; }\n",
+            "prepare() { . ./env.sh; }\n",
+            "unset _app\n",
+            "pkgver() { echo 9; }\n",
+        ] {
+            assert_eq!(resolved(extra), None, "resolved despite: {extra:?}");
+        }
+    }
+
+    #[test]
+    fn assignments_after_functions_or_with_escapes_do_not_resolve() {
+        let late = "pkgname=demo\nbuild() { :; }\n_app=late.AppImage\n";
+        assert!(
+            literal_variables(late, "demo", &["demo".to_string()])
+                .values
+                .get("_app")
+                .is_none()
+        );
+        let escaped = "pkgname=demo\n_app=\"\\$evil\"\n";
+        assert!(
+            literal_variables(escaped, "demo", &["demo".to_string()])
+                .values
+                .get("_app")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn harmless_commands_do_not_disable_resolution() {
+        for extra in [
+            "build() { export PATH=\"$srcdir/bin:$PATH\"; }\n",
+            "package() { find . -name '*.desktop' | while read -r f; do :; done; }\n",
+            "source=(\"${_app}::https://example.com/x\")\n",
+        ] {
+            assert_eq!(resolved(extra).as_deref(), Some("Demo_1.2.AppImage"), "{extra:?}");
+        }
+    }
+
+    #[test]
+    fn remote_artifact_names_follow_makepkg() {
+        assert_eq!(
+            remote_artifact_name("x.AppImage::https://h/releases/a.AppImage").as_deref(),
+            Some("x.AppImage")
+        );
+        assert_eq!(
+            remote_artifact_name("https://h/dl/tool-1.0.tar.gz#sha=1").as_deref(),
+            Some("tool-1.0.tar.gz")
+        );
+        assert_eq!(remote_artifact_name("git+https://h/repo.git"), None);
+        assert_eq!(remote_artifact_name("repo::git+https://h/repo.git"), None);
+        assert_eq!(remote_artifact_name("local.patch"), None);
     }
 }

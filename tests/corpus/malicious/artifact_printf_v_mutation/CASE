@@ -1,0 +1,2 @@
+expect_error=cannot be resolved safely
+note=printf -v with a quote-split name can rewrite the variable; any printf -v disables resolution

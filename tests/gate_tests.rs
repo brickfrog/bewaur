@@ -364,7 +364,7 @@ fn gate_fails_closed_on_dynamic_pkgbuild_install_assignment() {
     let tree = TestTree::new("dynamic-install");
     tree.write_build_file(
         "PKGBUILD",
-        "pkgname=gate-dynamic\n_install_name=gate-dynamic.install\ninstall=\"${_install_name}\"\npackage() { :; }\n",
+        "pkgname=gate-dynamic\n_install_name=$(printf gate-dynamic.install)\ninstall=\"${_install_name}\"\npackage() { :; }\n",
     );
     tree.write_build_file(
         ".SRCINFO",

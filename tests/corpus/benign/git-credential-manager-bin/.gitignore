@@ -1,0 +1,9 @@
+!PKGBUILD
+!.SRCINFO
+!git-credential-manager.install
+!.nvchecker.toml
+!.gitignore
+src
+pkg
+*.tar.zst
+*.tar.gz

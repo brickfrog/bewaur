@@ -324,6 +324,7 @@ fn cmd_gate(build_dir: &std::path::Path) -> i32 {
                 &tree.pkgbuild_content,
                 tree.install_script_content.as_deref(),
                 tree.local_source_content.as_deref(),
+                &tree.executed_artifacts,
                 &config,
             )
         },
@@ -739,6 +740,7 @@ fn cmd_approve(build_dir: &std::path::Path, reviewed_digest: Option<&str>) -> i3
                 &tree.pkgbuild_content,
                 tree.install_script_content.as_deref(),
                 tree.local_source_content.as_deref(),
+                &tree.executed_artifacts,
                 &config,
             )
         },

@@ -1,0 +1,2 @@
+expect_error=cannot be resolved safely
+note=a second assignment (here inside prepare) makes the variable unresolvable

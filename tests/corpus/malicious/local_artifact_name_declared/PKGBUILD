@@ -1,0 +1,15 @@
+pkgname=buzz-appimage
+pkgver=0.5.30
+pkgrel=1
+pkgdesc="x"
+arch=(x86_64)
+url="https://github.com/block/buzz"
+license=(Apache-2.0)
+_appimage="Buzz_${pkgver}_amd64.AppImage"
+source=("${_appimage}")
+sha256sums=('00065cd75d1340f0ee7066a680e5208a6957c389a3aaecc182f4f073aa16cd9a')
+prepare() {
+    chmod +x "${_appimage}"
+    ./"${_appimage}" --appimage-extract
+}
+package() { :; }

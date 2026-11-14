@@ -1,0 +1,2 @@
+expect_error=cannot be resolved safely
+note=a name built from command output never resolves

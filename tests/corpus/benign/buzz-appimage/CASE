@@ -1,0 +1,4 @@
+max_tier=ok
+required=P-EXEC-DOWNLOADED-ARTIFACT
+note=real AUR package that failed closed before literal-variable resolution
+revision=fd5e53d80fcefbc905899b2884db06e470466284

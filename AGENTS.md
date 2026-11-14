@@ -104,11 +104,11 @@ prebuilt binary-release package.
 | `src/features/aur_comments_analysis/` | AUR comments scanning for security-related keywords |
 | `src/shared/github.rs` | GitHub API client (star count, repo existence) |
 | `src/shared/aur_comments.rs` | AUR package page comment scraper |
-| `src/shared/local_build.rs` | Inert, path-confined Paru build-tree loader plus complete approval fingerprinting |
+| `src/shared/local_build.rs` | Inert, path-confined Paru build-tree loader, conservative literal-variable resolution, downloaded-artifact detection, plus complete approval fingerprinting |
 | `src/shared/signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) |
 | `src/shared/config.rs` | Strict, locked, atomic user config: exact-tree approvals, explicit permanent allowances, ignored signals/categories |
 | `src/artifact.rs` | Bounded, non-extracting ALPM archive validation, identity checks, install-script scan, and artifact findings |
-| `data/patterns.toml` | Regex pattern database (246 patterns). Total signals: 303 (pattern + hardcoded) |
+| `data/patterns.toml` | Regex pattern database (246 patterns). Total signals: 304 (pattern + hardcoded) |
 | `data/june-2026-compromised.txt` | Vendored snapshot of the public June 2026 AUR compromise list (compiled in, never fetched at scan time) |
 | `src/shared/shell_syntax.rs` | Non-executing shell lexer: comment stripping, quote-fragment joining, and pipeline/substitution composition detection |
 | `src/features/known_compromised/` | June 2026 compromise-list membership (Sketchy floor) |
@@ -126,7 +126,14 @@ the exact local PKGBUILD, `.SRCINFO`, referenced install scripts, and bounded
 local executable helpers without sourcing shell code. Literal PKGBUILD
 `install=` assignments and literal source arrays are checked independently of
 `.SRCINFO`; recognizable indirect install mutations fail closed, while arbitrary
-dynamic shell/source reconstruction is intentionally not claimed. Helper bytes
+dynamic shell/source reconstruction is intentionally not claimed. A narrow
+literal-variable resolver (`literal_variables`) expands names such as
+`./"${_appimage}"` and `install=$_pkgname.install` only for single top-level
+assignments with literal values, no other mention of the name, and no
+computed-name construct (`eval`, `printf -v`, namerefs, `${!…}`, `source`).
+A build step that executes a remote, checksum-pinned `source=()` artifact is
+reported as `P-EXEC-DOWNLOADED-ARTIFACT` (+10) instead of being read as a
+helper; executing an unpinned download fails closed. Helper bytes
 are decoded lossily, and inert patches/docs/config are not concatenated as
 shell. Unlike the interactive scan command and ALPM hook, the gate blocks
 `SKETCHY` and every higher-risk tier, plus all operational errors. Exact-tree

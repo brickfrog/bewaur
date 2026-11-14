@@ -128,7 +128,11 @@ an invalid UTF-8 byte cannot suppress nearby shell findings. Inert archives,
 patches, documentation, and configuration are resolved but not treated as
 executable shell. Remote and dynamically generated source names rely on
 `.SRCINFO`; the gate does not evaluate arbitrary PKGBUILD expressions to recover
-them. Package identities and all referenced local paths are validated, symlinks
+them. It does resolve simple literal variables (a single top-level
+`_appimage="App_${pkgver}.AppImage"` with no other way to change it), so an
+AppImage package that runs `./"${_appimage}" --appimage-extract` on its own
+checksum-pinned download scans normally and reports
+`P-EXEC-DOWNLOADED-ARTIFACT`; running an unpinned download still blocks. Package identities and all referenced local paths are validated, symlinks
 are resolved, and every file read must remain inside the canonical build
 directory.
 

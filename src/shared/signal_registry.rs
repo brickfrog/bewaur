@@ -123,6 +123,7 @@ fn hardcoded_signals() -> Vec<SignalDef> {
         ("P-NAMED-JS-PACKAGE-INSTALL", Pkgbuild, 45, "Build step installs a named package through npm, pnpm, yarn, or bun", false),
         ("P-INSTALL-NAMED-JS-PACKAGE", Pkgbuild, 90, "Install script fetches a named package through npm, pnpm, yarn, or bun", false),
         ("P-JUNE-2026-JS-IOC", Pkgbuild, 90, "Named install references a known June 2026 incident dependency", false),
+        ("P-EXEC-DOWNLOADED-ARTIFACT", Pkgbuild, 10, "Build step executes a downloaded, checksum-pinned source artifact", false),
         ("P-INSTALL-SUID-SGID", Pkgbuild, 90, "Install script creates or changes a file with SUID/SGID mode", false),
         ("G-INSTALL-SUID", Pkgbuild, 70, "install with SUID/SGID mode bits", false),
         // shell_analysis

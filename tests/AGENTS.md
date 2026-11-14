@@ -37,7 +37,10 @@
   strict gate blocks SKETCHY). Malicious cases are incident-derived samples
   with a `min_tier` and `required` bewaur signal IDs. Contexts are built from
   file contents only; nothing is sourced. `CASE` keys: `max_tier`, `min_tier`,
-  `required`, `forbidden`, `helpers`, `install`, `note`, `revision`. Run with
+  `required`, `forbidden`, `helpers`, `install`, `expect_error`, `note`,
+  `revision`. A case directory with a `.SRCINFO` is loaded through the real
+  gate loader (`local_build::load_build_tree`); `expect_error` asserts that the
+  loader refuses the tree. Run with
   `cargo test --test corpus_cases -- --nocapture` for the per-case report.
 
 ## Fixtures

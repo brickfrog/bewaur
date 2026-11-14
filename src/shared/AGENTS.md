@@ -19,7 +19,7 @@ Reusable modules consumed by features and the coordinator. Code goes here if it'
 | `github.rs` | GitHub API client (star count, repo existence). Supports `GITHUB_TOKEN` env var for higher rate limits | coordinator, github_stars feature |
 | `aur_comments.rs` | AUR package page HTML scraper for comment extraction | coordinator, aur_comments_analysis feature |
 | `js_package_manager.rs` | Non-executing active-shell parsing with iterative executable-heredoc traversal for named JS installs, June incident IOCs, dependency arrays, and privileged chmod/install modes with their targets (bundled `-Dm4755` included) | pkgbuild, install_script, pkgbuild_diff, gtfobins features |
-| `local_build.rs` | Inert `.SRCINFO`/PKGBUILD/install loader, bounded lossy helper discovery including process substitutions, code-loading interpreter options, and interpreter stdin files, canonical path confinement, and versioned full-tree fingerprints | pre-build gate, network-backed scans, exact approvals |
+| `local_build.rs` | Inert `.SRCINFO`/PKGBUILD/install loader, bounded lossy helper discovery including process substitutions, code-loading interpreter options, and interpreter stdin files, canonical path confinement, conservative literal-variable resolution, checksum-pinned downloaded-artifact detection, and versioned full-tree fingerprints | pre-build gate, network-backed scans, exact approvals |
 | `shell_syntax.rs` | Non-executing, parameter-expansion-aware shell comment and command-word lexer; prose-safe quote-fragment joining; multi-stage pipeline and command/process-substitution composition detection | pattern, GTFOBins and shell analysis |
 | `signal_registry.rs` | Central registry of all signal definitions (pattern + hardcoded) | cmd_signals, cmd_ignore |
 

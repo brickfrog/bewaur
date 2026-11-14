@@ -1,0 +1,2 @@
+expect_error=has no .SRCINFO checksum pin
+note=executing a downloaded source with SKIP checksums stays fail-closed

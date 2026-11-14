@@ -1,0 +1,2 @@
+expect_error=which .SRCINFO does not declare
+note=.SRCINFO claims a pinned download but the PKGBUILD ships a committed file under the same name
