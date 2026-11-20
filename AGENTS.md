@@ -134,6 +134,10 @@ literal-variable resolver (`literal_variables`) expands names such as
 `./"${_appimage}"` and `install=$_pkgname.install` only for single top-level
 assignments with literal values, no other mention of the name, and no
 computed-name construct (`eval`, `printf -v`, namerefs, `${!…}`, `source`).
+Helper/source discovery also resolves unmodified `CARCH` for every concrete
+architecture in `.SRCINFO`, including first literal substring replacements
+such as `${CARCH/aarch64/arm64}`. Glob substitutions and computed values remain
+unsupported; every resulting download must pass the existing checksum checks.
 A build step that executes a remote, checksum-pinned `source=()` artifact is
 reported as `P-EXEC-DOWNLOADED-ARTIFACT` (+10) instead of being read as a
 helper; executing an unpinned download fails closed. Helper bytes

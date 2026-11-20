@@ -38,6 +38,7 @@ pub struct LocalBuildTree {
 struct SrcInfo {
     pkgbase: String,
     package_names: Vec<String>,
+    architectures: Vec<String>,
     install_scripts: Vec<String>,
     local_sources: Vec<String>,
     /// Local filenames of remote, non-VCS sources whose checksum is not SKIP.
@@ -211,7 +212,6 @@ pub fn load_build_tree_from_manifest(
     // Independently inspect the PKGBUILD for literal install assignments and
     // read the union. Dynamic assignments are not safely resolvable without
     // evaluating attacker-controlled shell, so they fail closed.
-    let literals = literal_variables(&pkgbuild_content, &srcinfo.pkgbase, &srcinfo.package_names);
     let pkgbuild_install_scripts = extract_install_scripts(
         &pkgbuild_content,
         &srcinfo.pkgbase,
@@ -243,15 +243,50 @@ pub fn load_build_tree_from_manifest(
         Some(install_contents.join("\n\n"))
     };
 
-    let (local_source_candidates, executed_artifacts) = discover_local_source_candidates(
-        &pkgbuild_content,
-        &srcinfo.pkgbase,
-        &srcinfo.package_names,
-        &srcinfo.local_sources,
-        &srcinfo.checksummed_remote_sources,
-        &srcinfo.remote_sources,
-        &literals,
-    )?;
+    // Inspect every declared architecture, rather than assuming the scanner's
+    // host architecture is the one makepkg will use. Missing/`any` architecture
+    // metadata provides no concrete CARCH and keeps dynamic helpers fail-closed.
+    let architectures: Vec<Option<&str>> = if srcinfo.architectures.is_empty() {
+        vec![None]
+    } else {
+        srcinfo
+            .architectures
+            .iter()
+            .map(|arch| (arch != "any").then_some(arch.as_str()))
+            .collect()
+    };
+    let mut local_source_candidates = Vec::new();
+    let mut executed_artifacts = Vec::new();
+    for architecture in architectures {
+        let literals = literal_variables_for_arch(
+            &pkgbuild_content,
+            &srcinfo.pkgbase,
+            &srcinfo.package_names,
+            architecture,
+        );
+        let (candidates, artifacts) = discover_local_source_candidates(
+            &pkgbuild_content,
+            &srcinfo.pkgbase,
+            &srcinfo.package_names,
+            &srcinfo.local_sources,
+            &srcinfo.checksummed_remote_sources,
+            &srcinfo.remote_sources,
+            &literals,
+        )?;
+        for candidate in candidates {
+            add_local_source_candidate(
+                &mut local_source_candidates,
+                candidate.path,
+                candidate.explicitly_executed,
+                candidate.must_exist_before_build,
+            );
+        }
+        for artifact in artifacts {
+            if !executed_artifacts.contains(&artifact) {
+                executed_artifacts.push(artifact);
+            }
+        }
+    }
     let mut local_source_paths = Vec::new();
     let mut local_source_contents = Vec::new();
     let mut total_local_source_bytes = 0u64;
@@ -329,6 +364,7 @@ pub fn load_build_tree_from_manifest(
 fn parse_srcinfo(content: &str) -> Result<SrcInfo, String> {
     let mut pkgbase = None;
     let mut package_names = Vec::new();
+    let mut architectures = Vec::new();
     let mut install_scripts = Vec::new();
     let mut local_sources = Vec::new();
     let mut seen_packages = HashSet::new();
@@ -359,6 +395,23 @@ fn parse_srcinfo(content: &str) -> Result<SrcInfo, String> {
         let value = value.trim();
 
         match key {
+            "arch" => {
+                if value.is_empty()
+                    || !value
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    return Err(format!(
+                        "invalid .SRCINFO architecture on line {line_number}"
+                    ));
+                }
+                if !architectures.iter().any(|arch| arch == value) {
+                    if architectures.len() >= 32 {
+                        return Err("too many .SRCINFO architectures".to_string());
+                    }
+                    architectures.push(value.to_string());
+                }
+            }
             "pkgbase" => {
                 validate_package_name(value, ".SRCINFO pkgbase")?;
                 if pkgbase.replace(value.to_string()).is_some() {
@@ -430,6 +483,7 @@ fn parse_srcinfo(content: &str) -> Result<SrcInfo, String> {
     Ok(SrcInfo {
         pkgbase,
         package_names,
+        architectures,
         install_scripts,
         local_sources,
         checksummed_remote_sources,
@@ -1469,8 +1523,9 @@ fn resolve_known_install_template(
 ///   quote-joined view (which defeats `"_app""image=x"`), is `$name` or
 ///   `${name}`;
 /// - its value contains no backslash and expands only other resolvable
-///   variables (or `.SRCINFO`'s `pkgbase`/single `pkgname`), with no
-///   parameter operators, command substitution, or backticks; and
+///   variables (or `.SRCINFO`'s `pkgbase`/single `pkgname`/concrete architecture),
+///   allowing only a literal first-substring CARCH replacement among parameter
+///   operators, and no command substitution or backticks; and
 /// - the PKGBUILD has no construct that can assign a computed name: `eval`,
 ///   `printf -v`, namerefs, `${!...}`, `source`/`.`, or a
 ///   declare/export/local/readonly/read/mapfile/unset name containing `$`.
@@ -1508,14 +1563,33 @@ fn expand_literal_references(
                 .unwrap_or(after.len());
             (&after[..end], end)
         };
-        if !is_shell_identifier(name) {
-            return None;
+        if let Some((name, from, to)) = literal_arch_substitution(name) {
+            output.push_str(&lookup(name)?.replacen(from, to, 1));
+        } else {
+            if !is_shell_identifier(name) {
+                return None;
+            }
+            output.push_str(&lookup(name)?);
         }
-        output.push_str(&lookup(name)?);
         rest = &after[consumed..];
     }
     output.push_str(rest);
     Some(output)
+}
+
+/// Only a first, nonempty literal substring replacement of CARCH. Bash glob
+/// patterns, anchors, quoting, escapes and nested expansions are unsupported.
+fn literal_arch_substitution(expression: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = expression.split('/');
+    let name = parts.next()?;
+    let from = parts.next()?;
+    let to = parts.next()?;
+    let literal = |text: &str| {
+        text.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-.+".contains(&b))
+    };
+    (name == "CARCH" && !from.is_empty() && literal(from) && literal(to) && parts.next().is_none())
+        .then_some((name, from, to))
 }
 
 static FUNCTION_DEFINITION_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -1535,6 +1609,15 @@ static NAME_DEFINING_COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> LiteralVariables {
+    literal_variables_for_arch(content, pkgbase, package_names, None)
+}
+
+fn literal_variables_for_arch(
+    content: &str,
+    pkgbase: &str,
+    package_names: &[String],
+    architecture: Option<&str>,
+) -> LiteralVariables {
     let empty = LiteralVariables {
         values: std::collections::HashMap::new(),
     };
@@ -1611,11 +1694,16 @@ fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> 
     let builtins = |name: &str| match name {
         "pkgbase" => Some(pkgbase.to_string()),
         "pkgname" if package_names.len() == 1 => Some(package_names[0].clone()),
+        "CARCH" if name_mentions_are_plain_with_limit(name, &[&active, &joined], 0) => {
+            architecture.map(str::to_string)
+        }
         _ => None,
     };
 
     let mut values = std::collections::HashMap::new();
-    for name in raw_values.keys() {
+    let mut names: HashSet<String> = raw_values.keys().cloned().collect();
+    names.insert("CARCH".to_string());
+    for name in &names {
         if name == "pkgver" && has_pkgver_function {
             continue;
         }
@@ -1640,6 +1728,10 @@ fn literal_variables(content: &str, pkgbase: &str, package_names: &[String]) -> 
 /// Every whole-word mention of `name` is `$name`, `${name}`, or the single
 /// `name=` assignment at the start of a word.
 fn name_mentions_are_plain(name: &str, views: &[&str]) -> bool {
+    name_mentions_are_plain_with_limit(name, views, 1)
+}
+
+fn name_mentions_are_plain_with_limit(name: &str, views: &[&str], max_assignments: usize) -> bool {
     views.iter().all(|view| {
         let bytes = view.as_bytes();
         let mut assignments = 0usize;
@@ -1657,6 +1749,12 @@ fn name_mentions_are_plain(name: &str, views: &[&str]) -> bool {
             match (before, after) {
                 (Some(b'$'), _) => {}
                 (Some(b'{'), Some(b'}')) if start >= 2 && bytes[start - 2] == b'$' => {}
+                (Some(b'{'), Some(b'/'))
+                    if start >= 2
+                        && bytes[start - 2] == b'$'
+                        && view[end..].find('}').is_some_and(|close| {
+                            literal_arch_substitution(&view[start..end + close]).is_some()
+                        }) => {}
                 (None | Some(b' ' | b'\t' | b'\n' | b';'), Some(b'='))
                     if bytes.get(end + 1) != Some(&b'=') =>
                 {
@@ -1665,7 +1763,7 @@ fn name_mentions_are_plain(name: &str, views: &[&str]) -> bool {
                 _ => return false,
             }
         }
-        assignments <= 1
+        assignments <= max_assignments
     })
 }
 
@@ -2581,6 +2679,84 @@ mod tests {
             "pkgname=demo\npkgver=1\npkgrel=1\npackage() { :; }\n",
         );
         dir.write(".SRCINFO", "pkgbase = demo\n\npkgname = demo\n");
+    }
+
+    fn write_arch_appimage_tree(dir: &TestDir, extra: &str, arm_checksum: &str) {
+        dir.write(
+            "PKGBUILD",
+            &format!(
+                "pkgname=demo\npkgver=1\n\
+             _app=\"Demo-${{pkgver}}-${{CARCH/aarch64/arm64}}.AppImage\"\n\
+             source_x86_64=('Demo-1-x86_64.AppImage::https://example.invalid/x')\n\
+             source_aarch64=('Demo-1-arm64.AppImage::https://example.invalid/a')\n\
+             prepare() {{\n{extra}\n\"$srcdir/$_app\" --appimage-extract\n}}\n"
+            ),
+        );
+        dir.write(
+            ".SRCINFO",
+            &format!(
+                "pkgbase = demo\narch = x86_64\narch = aarch64\n\
+             source_x86_64 = Demo-1-x86_64.AppImage::https://example.invalid/x\n\
+             sha256sums_x86_64 = abc\n\
+             source_aarch64 = Demo-1-arm64.AppImage::https://example.invalid/a\n\
+             sha256sums_aarch64 = {arm_checksum}\npkgname = demo\n"
+            ),
+        );
+    }
+
+    #[test]
+    fn architecture_substitution_resolves_all_downloaded_artifacts() {
+        let dir = TestDir::new("arch-appimage");
+        write_arch_appimage_tree(&dir, "", "def");
+        let tree = load_build_tree(&dir.0, "demo").unwrap();
+        assert_eq!(
+            tree.executed_artifacts,
+            ["Demo-1-x86_64.AppImage", "Demo-1-arm64.AppImage"]
+        );
+        assert!(tree.local_source_paths.is_empty());
+    }
+
+    #[test]
+    fn architecture_substitution_requires_every_architecture_checksum() {
+        let dir = TestDir::new("arch-appimage-unpinned");
+        write_arch_appimage_tree(&dir, "", "SKIP");
+        let error = load_build_tree(&dir.0, "demo").unwrap_err();
+        assert!(error.contains("has no .SRCINFO checksum pin"), "{error}");
+    }
+
+    #[test]
+    fn architecture_substitution_rejects_mutations_and_computed_values() {
+        let dir = TestDir::new("arch-appimage-mutations");
+        for extra in [
+            "CARCH=payload",
+            "unset CARCH",
+            "read CARCH",
+            "local CARCH=x",
+            "eval 'CARCH=x'",
+            "_app=payload.sh",
+            "printf -v CARCH %s x",
+        ] {
+            write_arch_appimage_tree(&dir, extra, "def");
+            let error = load_build_tree(&dir.0, "demo").unwrap_err();
+            assert!(
+                error.contains("cannot be resolved safely"),
+                "{extra}: {error}"
+            );
+        }
+        for expression in [
+            "${CARCH//aarch64/arm64}",
+            "${CARCH/a*/arm64}",
+            "${CARCH/aarch64/$other}",
+            "$(uname -m)",
+        ] {
+            write_arch_appimage_tree(&dir, "", "def");
+            let pkgbuild = fs::read_to_string(dir.0.join("PKGBUILD")).unwrap();
+            dir.write(
+                "PKGBUILD",
+                &pkgbuild.replace("${CARCH/aarch64/arm64}", expression),
+            );
+            assert!(load_build_tree(&dir.0, "demo").is_err(), "{expression}");
+        }
     }
 
     #[test]

@@ -132,7 +132,11 @@ them. It does resolve simple literal variables (a single top-level
 `_appimage="App_${pkgver}.AppImage"` with no other way to change it), so an
 AppImage package that runs `./"${_appimage}" --appimage-extract` on its own
 checksum-pinned download scans normally and reports
-`P-EXEC-DOWNLOADED-ARTIFACT`; running an unpinned download still blocks. Package identities and all referenced local paths are validated, symlinks
+`P-EXEC-DOWNLOADED-ARTIFACT`; running an unpinned download still blocks.
+Helper/source discovery resolves unmodified `CARCH` for every concrete
+architecture declared in `.SRCINFO`, including literal substitutions such as
+`${CARCH/aarch64/arm64}`. Glob substitutions and computed values fail closed.
+Package identities and all referenced local paths are validated, symlinks
 are resolved, and every file read must remain inside the canonical build
 directory.
 
