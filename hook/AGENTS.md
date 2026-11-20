@@ -18,9 +18,8 @@ ALPM (pacman) hook integration for automatic pre-install scanning.
 1. pacman triggers the hook before any Install or Upgrade transaction
 2. ALPM passes matched package names to `bewaur-hook` via stdin (one per line)
 3. `bewaur-hook` filters out official repo packages using `pacman -Sl`
-4. Batch-fetches AUR metadata and requires an explicit outcome for every
-   non-official target; an omitted target blocks unless its exact transaction
-   name has a permanent allowance
+4. Batch-fetches AUR metadata; targets absent from a successful, validated
+   response are visibly skipped as local/non-AUR packages. Lookup failures block.
 5. Remaining AUR packages are scanned silently (progress indicator only)
 6. After all scans, a tier summary is printed (counts per tier)
 7. Decision logic:
@@ -56,13 +55,13 @@ rejects the extension's `NetworkAccess` key, so it must continue to receive
   TRUSTED/OK results pass but SKETCHY/SUSPICIOUS results block because nobody
   can approve them; MALICIOUS results always block.
 - **Fail closed**: If target input, metadata, or a package scan is incomplete
-  (Git timeout, network failure, omitted RPC row, invalid target stream, etc.),
+  (Git timeout, network failure, malformed RPC response, invalid target stream, etc.),
   the hook blocks the transaction. Git operations have a 30-second timeout to
-  prevent indefinite hangs. A local-only or debug package omitted by the AUR
-  must be authorized explicitly with `allow <exact-transaction-name> --forever`.
+  prevent indefinite hangs. Local-only and debug packages absent from a successful
+  AUR lookup need no permanent allowance and are explicitly reported as unscanned.
 - **Authorization scope**: exact-tree approvals cannot apply because ALPM does
   not provide the helper's checked-out tree. The hook resolves split outputs to
-  their AUR package base and honors `allow <pkgbase> --forever`. When metadata
-  is absent, only the exact transaction name can be matched. Malformed, legacy,
+  their AUR package base and honors `allow <pkgbase> --forever`. Non-AUR packages
+  are outside this scanner's scope. Malformed, legacy,
   or unreadable config blocks rather than silently becoming defaults.
 - **Official repo skip**: `pacman -Sl` is fast and reliable for filtering. AUR packages are not in sync databases.

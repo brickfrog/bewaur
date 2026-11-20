@@ -161,8 +161,8 @@ fn main() {
 
     // --- Phase 1: Collect results silently ---
 
-    // Batch-fetch metadata for every non-official target. Omissions remain
-    // explicit security decisions rather than silently becoming local-only packages.
+    // A successful AUR lookup can legitimately omit locally built packages.
+    // Lookup/parse failures still block; an absent package is outside AUR scanning.
     let batch = match bulk::batch_fetch_metadata(&aur_packages) {
         Ok(metadata) => metadata,
         Err(e) => {
@@ -178,13 +178,11 @@ fn main() {
         }
     };
     let metadata = batch.packages;
-    // Exact-tree approvals apply only to the Paru pre-build gate. Resolve each
-    // transaction package to its AUR package base before applying the explicit
-    // permanent allowance, so split-package outputs behave consistently. If
-    // metadata is absent, only an allowance for the exact transaction name can
-    // authorize the otherwise unscanned package.
-    let (mut permanently_allowed_count, mut scan_errors) =
-        missing_metadata_decisions(&config, &batch.missing);
+    report_non_aur_targets(&mut hook_io, &batch.missing);
+    // Exact-tree approvals apply only to the Paru pre-build gate. Resolve AUR
+    // outputs to their package base before applying permanent allowances.
+    let mut permanently_allowed_count = 0;
+    let mut scan_errors = Vec::new();
     let scan_packages: Vec<String> = aur_packages
         .into_iter()
         .filter(|name| {
@@ -203,8 +201,12 @@ fn main() {
     let any_scanned = !scan_packages.is_empty();
     let total_scan = scan_packages.len();
 
-    // Pre-fetch maintainer data for all packages
-    let maintainer_packages = bulk::prefetch_maintainer_packages(&metadata);
+    // Avoid empty maintainer/progress output for local-only transactions.
+    let maintainer_packages = if any_scanned {
+        bulk::prefetch_maintainer_packages(&metadata)
+    } else {
+        Default::default()
+    };
 
     let mut results: Vec<ScanResult> = Vec::new();
     let mut tier_counts: [u32; 5] = [0, 0, 0, 0, 0]; // Trusted, Ok, Sketchy, Suspicious, Malicious
@@ -391,23 +393,13 @@ fn transaction_has_permanent_allowance(
     package_base.is_some_and(|package_base| is_permanently_allowed_in(config, package_base))
 }
 
-fn missing_metadata_decisions(
-    config: &config::Config,
-    missing: &[String],
-) -> (u32, Vec<(String, String)>) {
-    let mut allowed = 0u32;
-    let mut errors = Vec::new();
+fn report_non_aur_targets(writer: &mut impl Write, missing: &[String]) {
     for name in missing {
-        if is_permanently_allowed_in(config, name) {
-            allowed += 1;
-        } else {
-            errors.push((
-                name.clone(),
-                "AUR metadata response omitted this non-official transaction target".to_string(),
-            ));
-        }
+        let _ = writeln!(
+            writer,
+            "  {name:?}: not found in AUR; skipping AUR scan (local or non-AUR package)."
+        );
     }
-    (allowed, errors)
 }
 
 /// Get all package names from official sync databases in one call.
@@ -492,19 +484,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_metadata_requires_an_exact_permanent_allowance() {
-        let mut config = config::Config::default();
-        config
-            .permanent_allow
-            .packages
-            .push("allowed-local".to_string());
-        let missing = vec!["blocked-local".to_string(), "allowed-local".to_string()];
-
-        let (allowed, errors) = missing_metadata_decisions(&config, &missing);
-
-        assert_eq!(allowed, 1);
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].0, "blocked-local");
-        assert!(errors[0].1.contains("omitted"));
+    fn non_aur_targets_are_visibly_skipped_without_an_allowance() {
+        let mut output = Vec::new();
+        report_non_aur_targets(&mut output, &["bewaur".into(), "my-local-package".into()]);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("\"bewaur\": not found in AUR"));
+        assert!(output.contains("\"my-local-package\": not found in AUR"));
+        assert!(!output.contains("clean"));
     }
 }

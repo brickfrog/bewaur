@@ -24,6 +24,7 @@ static AUR_CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
 struct RpcResponse {
     #[serde(rename = "type")]
     response_type: String,
+    resultcount: usize,
     #[serde(default)]
     error: Option<String>,
     results: Vec<AurPackage>,
@@ -138,6 +139,12 @@ fn parse_rpc_response(body: &str) -> Result<RpcResponse, String> {
         ));
     }
 
+    if !matches!(response.response_type.as_str(), "multiinfo" | "search")
+        || response.resultcount != response.results.len()
+    {
+        return Err("AUR RPC returned an invalid response type or result count".to_string());
+    }
+
     Ok(response)
 }
 
@@ -177,7 +184,11 @@ fn fetch_packages_info_at(
     names: &[&str],
 ) -> Result<Vec<AurPackage>, String> {
     let url = build_info_url_at(base, names)?;
-    send_rpc_request(client.get(url)).map(|response| response.results)
+    let response = send_rpc_request(client.get(url))?;
+    if response.response_type != "multiinfo" {
+        return Err("AUR package info request returned a non-info response".to_string());
+    }
+    Ok(response.results)
 }
 
 /// Fetch info for a single package from the AUR RPC API.
@@ -272,6 +283,23 @@ mod tests {
         let body = error.split("body: ").nth(1).unwrap();
         assert!(body.ends_with("..."), "{error}");
         assert!(body.len() <= ERROR_BODY_LIMIT + 3, "{error}");
+    }
+
+    #[test]
+    fn valid_absence_is_distinct_from_invalid_or_incomplete_responses() {
+        assert!(
+            parse_rpc_response(r#"{"type":"multiinfo","resultcount":0,"results":[]}"#)
+                .unwrap()
+                .results
+                .is_empty()
+        );
+        for body in [
+            r#"{"type":"multiinfo","resultcount":1,"results":[]}"#,
+            r#"{"type":"unexpected","resultcount":0,"results":[]}"#,
+            r#"{"type":"multiinfo","results":[]}"#,
+        ] {
+            assert!(parse_rpc_response(body).is_err(), "{body}");
+        }
     }
 
     #[test]

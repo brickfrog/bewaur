@@ -1,7 +1,7 @@
 # Maintainer: brickfrog
 pkgname=bewaur
 pkgver=0.4.1
-pkgrel=3
+pkgrel=4
 pkgdesc='Trust scoring for AUR packages'
 arch=('x86_64')
 url='https://github.com/brickfrog/bewaur'

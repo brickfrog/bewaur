@@ -177,6 +177,9 @@ transaction, that hook prompts for
 `SKETCHY`/`SUSPICIOUS` results. Without a controlling terminal it still scans:
 clean results pass, while flagged results and scan errors block instead of
 silently skipping the check.
+Packages absent from a successful AUR lookup are reported as local/non-AUR
+and skipped, so local builds need no permanent allowance. Lookup failures and
+malformed responses still block the transaction.
 
 ## Inspect the package that was actually built
 
